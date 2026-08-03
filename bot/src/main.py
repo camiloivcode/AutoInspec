@@ -2,11 +2,14 @@ import asyncio
 import logging
 from typing import Optional
 
-import httpx
 from rich.console import Console
 from rich.logging import RichHandler
 
 from .config import BotSettings
+from .services.redis_client import RedisClient
+from .handlers.document_generator import DocumentGenerationHandler
+from .handlers.inspection_handler import InspectionHandler
+from .handlers.notifier import NotifierHandler
 
 console = Console()
 logging.basicConfig(
@@ -21,45 +24,55 @@ logger = logging.getLogger("bot")
 class InspectionBot:
     def __init__(self, settings: Optional[BotSettings] = None):
         self.settings = settings or BotSettings()
-        self._client: Optional[httpx.AsyncClient] = None
+        self._redis = RedisClient(self.settings.redis_url)
+        self._doc_handler = DocumentGenerationHandler(
+            self.settings.api_base_url,
+            self.settings.api_key,
+            concurrency=3,
+        )
+        self._insp_handler = InspectionHandler(
+            self.settings.api_base_url,
+            self.settings.api_key,
+            concurrency=5,
+        )
+        self._notifier = NotifierHandler(
+            self.settings.api_base_url,
+            self.settings.api_key,
+        )
         self._running = False
-
-    @property
-    def client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            headers = {}
-            if self.settings.api_key:
-                headers["Authorization"] = f"Bearer {self.settings.api_key}"
-            self._client = httpx.AsyncClient(
-                base_url=self.settings.api_base_url,
-                headers=headers,
-                timeout=30.0,
-            )
-        return self._client
 
     async def start(self):
         self._running = True
         logger.info(f"Bot iniciado. API: {self.settings.api_base_url}")
-        logger.info("Modo: Escuchando eventos para procesamiento...")
+        logger.info(f"Redis: {self.settings.redis_url}")
 
-        await self.check_api_health()
+        await self._redis.connect()
+        await self._check_api_health()
 
-        while self._running:
-            try:
-                await self.process_pending_tasks()
-            except Exception as e:
-                logger.error(f"Error en ciclo principal: {e}")
-            await asyncio.sleep(self.settings.polling_interval_seconds)
+        tasks = [
+            asyncio.create_task(self._polling_loop()),
+            asyncio.create_task(self._redis.subscribe("task:generate", self._on_generate_task)),
+        ]
+        logger.info("Bot listo — polling + escuchando tareas Redis")
+
+        try:
+            await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await self.stop()
 
     async def stop(self):
         self._running = False
-        if self._client:
-            await self._client.aclose()
+        await self._redis.disconnect()
+        await self._doc_handler.close()
+        await self._insp_handler.close()
+        await self._notifier.close()
         logger.info("Bot detenido.")
 
-    async def check_api_health(self) -> bool:
+    async def _check_api_health(self) -> bool:
         try:
-            response = await self.client.get("/health")
+            response = await self._doc_handler.api_get("/health")
             if response.status_code == 200:
                 logger.info(f"Conexión con API establecida: {response.json()}")
                 return True
@@ -69,82 +82,45 @@ class InspectionBot:
             logger.warning(f"No se pudo conectar con la API: {e}")
             return False
 
-    async def process_pending_tasks(self):
-        tasks_to_process = await self._fetch_pending_documents()
-        for task in tasks_to_process:
-            await self._process_document_generation(task)
-
-        pending_inspections = await self._fetch_pending_inspections()
-        for inspection in pending_inspections:
-            await self._process_inspection_completion(inspection)
-
-    async def _fetch_pending_documents(self) -> list:
-        try:
-            response = await self.client.get("/documents", params={"limit": 10})
-            if response.status_code == 200:
-                data = response.json()
-                return [
-                    doc for doc in data.get("documents", [])
-                    if doc.get("status") == "pending"
-                ]
-        except Exception as e:
-            logger.debug(f"Error fetching pending documents: {e}")
-        return []
-
-    async def _process_document_generation(self, doc: dict):
-        doc_id = doc.get("id")
-        logger.info(f"Procesando documento pendiente: {doc_id}")
-        try:
-            response = await self.client.post(f"/documents/{doc_id}/generate")
-            if response.status_code == 200:
-                logger.info(f"Documento {doc_id} generado exitosamente")
-            else:
-                logger.error(f"Error generando documento {doc_id}: {response.text}")
-        except Exception as e:
-            logger.error(f"Error en documento {doc_id}: {e}")
-
-    async def _fetch_pending_inspections(self) -> list:
-        try:
-            response = await self.client.get("/inspections", params={"limit": 10})
-            if response.status_code == 200:
-                data = response.json()
-                return [
-                    inv for inv in data.get("inspections", [])
-                    if inv.get("status") == "in_progress"
-                ]
-        except Exception as e:
-            logger.debug(f"Error fetching pending inspections: {e}")
-        return []
-
-    async def _process_inspection_completion(self, inspection: dict):
-        inv_id = inspection.get("id")
-        logger.info(f"Revisando inspección en progreso: {inv_id}")
-
-    async def process_image_ocr(self, image_url: str) -> Optional[dict]:
-        logger.info(f"Procesando OCR para imagen: {image_url}")
-        await asyncio.sleep(0.1)
-        return None
-
-    async def notify_whatsapp(self, to: str, message: str) -> bool:
-        logger.info(f"Notificación WhatsApp a {to}: {message[:50]}...")
-        await asyncio.sleep(0.1)
-        return True
-
-    async def process_batch(self, inspection_ids: list[str]) -> dict:
-        results = {"success": 0, "failed": 0, "details": []}
-        for inv_id in inspection_ids:
+    async def _polling_loop(self):
+        backoff = 1
+        while self._running:
             try:
-                response = await self.client.post(f"/inspections/{inv_id}/complete")
-                if response.status_code == 200:
-                    results["success"] += 1
-                    results["details"].append({"id": inv_id, "status": "completed"})
-                else:
-                    results["failed"] += 1
-                    results["details"].append({"id": inv_id, "status": "failed"})
+                total = 0
+                total += await self._doc_handler.process_pending()
+                total += await self._insp_handler.process_pending()
+                backoff = 1 if total > 0 else min(backoff * 2, 60)
             except Exception as e:
-                results["failed"] += 1
-                results["details"].append({"id": inv_id, "error": str(e)})
-        return results
+                logger.error(f"Error en ciclo de polling: {e}")
+                backoff = min(backoff * 2, 60)
+            await asyncio.sleep(backoff)
+
+    async def _on_generate_task(self, data: dict):
+        task_type = data.get("type", "")
+        task_id = data.get("id", "")
+        logger.info(f"Tarea recibida: {task_type} [{task_id}]")
+
+        locked = await self._redis.try_lock(f"task:{task_type}:{task_id}", ttl=300)
+        if not locked:
+            logger.debug(f"Tarea {task_id} ya en proceso, saltando")
+            return
+
+        try:
+            if task_type == "generate_document":
+                doc = {"id": task_id}
+                await self._doc_handler._generate(doc)
+            elif task_type == "notify_whatsapp":
+                await self._notifier.notify_inspection_complete(
+                    task_id,
+                    data.get("phone"),
+                    data.get("driver_name", ""),
+                )
+            else:
+                logger.warning(f"Tipo de tarea desconocido: {task_type}")
+        except Exception as e:
+            logger.error(f"Error ejecutando tarea {task_id}: {e}")
+        finally:
+            await self._redis.release_lock(f"task:{task_type}:{task_id}")
 
 
 async def main():

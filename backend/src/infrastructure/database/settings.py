@@ -35,7 +35,11 @@ def get_engine(settings: Optional[DatabaseSettings] = None):
     global _engine
     if _engine is None:
         s = settings or DatabaseSettings()
-        _engine = create_async_engine(s.url, echo=s.echo, pool_size=10, max_overflow=20)
+        _engine = create_async_engine(
+            s.url, echo=s.echo,
+            pool_size=10, max_overflow=20,
+            pool_recycle=3600, pool_pre_ping=True,
+        )
     return _engine
 
 
