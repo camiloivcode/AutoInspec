@@ -1,14 +1,22 @@
 import os
-import re
-import json
 import logging
+import threading
+from collections import defaultdict
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
-import numpy as np
 
 from .reference_matcher import extract_features
+
+# classify_batch runs classify() for up to 8 photos concurrently
+# (ThreadPoolExecutor below), but Tesseract is CPU-heavy enough that 8
+# concurrent subprocesses starve each other: measured 81/81 OCR timeouts
+# under full concurrency vs. 1/81 sequentially (see backend/eval/results/).
+# Capping concurrent Tesseract subprocesses independently of the classify
+# thread pool keeps CLIP embedding inference (cheap, doesn't need this) at
+# full parallelism while OCR gets enough CPU per process to finish.
+_OCR_CONCURRENCY = threading.Semaphore(2)
 
 logger = logging.getLogger(__name__)
 
@@ -26,86 +34,35 @@ INSPECTION_POSITIONS = {
     11: "SOAT y documentos",
 }
 
-# Categories a photo can plausibly be reassigned within if its detected
-# position is already taken by another photo in the same batch. Kept as a
-# short allow-list (not the full position space) so a driver photo, say,
-# never gets forced onto "kit de carretera" just because that slot is free.
-COLLISION_ALLOW_LIST = {
-    1: [11], 11: [1],
-    2: [3, 6], 3: [2, 6, 7], 4: [5], 5: [4],
-    6: [2, 3, 7], 7: [3, 6],
-    8: [],
-    9: [10], 10: [9],
-}
+# Max photos classify_batch will assign to a given position before treating
+# further matches as collisions. Every position defaults to 1; position 10
+# ("Gato y llanta de repuesto") is the one exception, matching the same cap
+# enforced on manual assignment in generate.py's MAX_PER_POSITION.
+MAX_PER_POSITION = {10: 2}
 
-# Feature keys used to compare a contested photo against each position's
-# reference profile when resolving collisions (see _find_alternative_position).
-SIMILARITY_FEATURE_KEYS = [
-    "brightness", "sat_mean", "hue_mean", "blue_ratio",
-    "edge_pct", "laplacian_var", "aspect_ratio", "sky_blue_ratio",
-]
 
-DEFAULT_PROFILES_PATH = os.path.join(os.path.dirname(__file__), "position_profiles.json")
+def _confidence_from_prob(p: float) -> str:
+    """Bucketing for a raw softmax probability (not a margin ratio -- see
+    _margin_to_confidence for that). Thresholds are well above the 11-class
+    chance baseline (~0.09) so "low" still means a real, weak signal."""
+    if p >= 0.5:
+        return "high"
+    if p >= 0.3:
+        return "medium"
+    return "low"
 
 
 class PhotoClassifier:
-    def __init__(self, reference_dir: str = None):
+    def __init__(self):
         self._face_cascade = None
         self._cache: dict[str, dict] = {}
-        self._position_profiles = self._load_position_profiles(reference_dir)
+        self._embedding_classifier = None
 
     def _get_face_cascade(self):
         if self._face_cascade is None:
             cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
             self._face_cascade = cv2.CascadeClassifier(cascade_path)
         return self._face_cascade
-
-    # ---- position similarity profiles (used by collision resolution) ----
-
-    def _load_position_profiles(self, reference_dir: Optional[str]) -> dict[int, np.ndarray]:
-        if reference_dir and os.path.isdir(reference_dir):
-            try:
-                built = self._build_profiles_from_dir(reference_dir)
-                if built:
-                    return built
-            except Exception as e:
-                logger.warning(f"Could not build position profiles from {reference_dir}: {e}")
-
-        if os.path.exists(DEFAULT_PROFILES_PATH):
-            try:
-                with open(DEFAULT_PROFILES_PATH, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                return {int(k): np.array(v, dtype=float) for k, v in data.items()}
-            except Exception as e:
-                logger.warning(f"Could not load default position profiles: {e}")
-
-        return {}
-
-    def _build_profiles_from_dir(self, directory: str) -> dict[int, np.ndarray]:
-        profiles: dict[int, np.ndarray] = {}
-        for entry in os.listdir(directory):
-            full_path = os.path.join(directory, entry)
-            if not os.path.isdir(full_path):
-                continue
-            match = re.match(r"^\s*(\d{1,2})", entry)
-            if not match:
-                continue
-            pos_num = int(match.group(1))
-            if pos_num not in INSPECTION_POSITIONS:
-                continue
-
-            vectors = []
-            for fname in os.listdir(full_path):
-                fpath = os.path.join(full_path, fname)
-                feats = extract_features(fpath)
-                if feats is None:
-                    continue
-                vectors.append([feats.get(k, 0.0) for k in SIMILARITY_FEATURE_KEYS])
-
-            if vectors:
-                profiles[pos_num] = np.mean(np.array(vectors, dtype=float), axis=0)
-
-        return profiles
 
     # ---- confidence helpers ----
 
@@ -126,6 +83,15 @@ class PhotoClassifier:
     # ---- classification ----
 
     def classify(self, image_path: str) -> tuple[Optional[int], dict]:
+        """CLIP-embedding classifier (see embedding_classifier.py) is the
+        primary decision maker -- measured at 75% cross-validated accuracy
+        on session-held-out data, vs. 4.94% for the hand-tuned absolute
+        thresholds this replaced (backend/eval/results/). OCR and face
+        detection remain as overrides for positions 1 and 8: they're
+        independent, stronger signals than anything a generic image
+        embedding can infer, so a confident hit there should win even when
+        it disagrees with the embedding head.
+        """
         cached = self._cache.get(image_path)
         if cached and "features" in cached:
             features = cached["features"]
@@ -135,25 +101,42 @@ class PhotoClassifier:
                 return None, {"method": "unreadable", "confidence": "low"}
             self._cache.setdefault(image_path, {})["features"] = features
 
-        result = self._detect_document_group(features, image_path)
-        if result:
-            return result
+        text_regions, text_length = self._detect_text_density(image_path)
+        doc_override = self._detect_document_override(features, text_regions, text_length)
+        if doc_override:
+            return doc_override
 
-        result = self._detect_driver_group(features, image_path)
-        if result:
-            return result
+        embedding_pos, embedding_info = self._get_embedding_classifier().classify(image_path)
 
-        result = self._detect_carparts_group(features, image_path)
-        if result:
-            return result
+        if self._detect_face(image_path):
+            probs = embedding_info.get("probs") or {}
+            driver_prob = float(probs.get("8", 0.0))
+            return 8, {
+                "method": "face_detected_override",
+                "confidence": _confidence_from_prob(driver_prob),
+                "margin": round(driver_prob, 4),
+            }
 
-        result = self._detect_exterior_group(features, image_path)
-        if result:
-            return result
-
-        return None, {"method": "unclassified", "confidence": "low"}
+        return embedding_pos, embedding_info
 
     def classify_batch(self, image_paths: list[str]) -> dict:
+        """Runs classify() per photo, then resolves position collisions with
+        a deterministic global assignment instead of a hand-written adjacency
+        map. Every (photo, position) pair the embedding classifier scored is
+        a candidate; OCR/face overrides contribute their single winning
+        position at probability 1.0, since they're independent, stronger
+        evidence than the embedding for the position they fire on. All
+        candidates are sorted by probability, then assigned greedily -- the
+        photo most confident about a slot claims it first. This replaced a
+        hardcoded COLLISION_ALLOW_LIST (e.g. "if position 8 is taken, there
+        is no fallback") plus a same-batch reassignment scored against
+        reference_matcher features, which measured 66.67% with 16% of
+        photos left unassigned on the 81-photo eval set -- almost entirely
+        from collisions the allow-list had no answer for (see
+        backend/eval/results/). This scores 88.89% at the per-photo level;
+        the ~10-point gap that remains here is inherent to batch collisions,
+        not an artifact of the old adjacency map.
+        """
         n = len(image_paths)
         results: list[tuple[int, Optional[int], dict]] = [None] * n
 
@@ -168,363 +151,94 @@ class PhotoClassifier:
                     logger.warning(f"Classify failed for {image_paths[idx]}: {e}")
                     results[idx] = (idx, None, {"method": "error", "confidence": "low"})
 
-        used_positions: set[int] = set()
+        # Build every (photo_idx, position, probability, info) candidate.
+        candidates: list[tuple[int, int, float, dict]] = []
+        for idx, pos, info in results:
+            if pos is None:
+                continue
+            probs = info.get("probs")
+            if probs:
+                for pos_str, p in probs.items():
+                    candidates.append((idx, int(pos_str), float(p), info))
+            else:
+                # OCR/face overrides (and any method without a full
+                # distribution) only offer their single winning position,
+                # treated as maximally confident.
+                candidates.append((idx, pos, 1.0, info))
+
+        candidates.sort(key=lambda c: c[2], reverse=True)
+
+        position_counts: dict[int, int] = defaultdict(int)
+        assigned_idx: set[int] = set()
         assignments: dict[str, dict] = {}
 
-        for idx, pos, info in results:
+        for idx, pos, prob, info in candidates:
+            if idx in assigned_idx:
+                continue
+            if position_counts[pos] >= MAX_PER_POSITION.get(pos, 1):
+                continue
             path = image_paths[idx]
-            if pos is not None and pos not in used_positions:
+            if pos == results[idx][1]:
+                # This candidate is the photo's own top prediction -- keep
+                # its original info (method/confidence) as reported by classify().
                 assignments[path] = {"position": pos, "info": info}
-                used_positions.add(pos)
-            elif pos is not None and pos in used_positions:
-                features = self._cache.get(path, {}).get("features")
-                alt = self._find_alternative_position(pos, used_positions, features)
-                if alt:
-                    alt_pos, margin_ratio = alt
-                    conf, m = self._margin_to_confidence(margin_ratio)
-                    assignments[path] = {
-                        "position": alt_pos,
-                        "info": {"method": "alternative_position", "confidence": conf, "margin": m},
-                    }
-                    used_positions.add(alt_pos)
-                else:
-                    assignments[path] = {"position": None, "info": {"method": "position_taken_no_alternative", "confidence": "low"}}
             else:
-                assignments[path] = {"position": None, "info": info}
+                assignments[path] = {
+                    "position": pos,
+                    "info": {"method": "global_assignment", "confidence": _confidence_from_prob(prob), "margin": round(prob, 4)},
+                }
+            position_counts[pos] += 1
+            assigned_idx.add(idx)
+
+        for idx, pos, info in results:
+            if idx not in assigned_idx:
+                path = image_paths[idx]
+                assignments[path] = {"position": None, "info": {"method": "no_slot_available", "confidence": "low"}}
 
         self._cache.clear()
         return assignments
 
-    def _find_alternative_position(self, original_pos: int, used: set[int], features: Optional[dict]) -> Optional[tuple[int, float]]:
-        candidates = [p for p in COLLISION_ALLOW_LIST.get(original_pos, []) if p not in used]
-        if not candidates:
+    def _detect_document_override(self, features: dict, text_regions: int, text_length: int) -> Optional[tuple]:
+        """Only the strongest OCR evidence tier overrides the embedding
+        classifier -- weaker text signals (a stray label, a sticker) are
+        left to the embedding, which already classifies documents (pos 1
+        and 11) at 100% on held-out data without needing OCR at all."""
+        if text_regions < 4 or text_length < 200:
             return None
 
-        if not features or not self._position_profiles:
-            # No similarity data available: fall back to the first plausible
-            # candidate with a conservative (low) confidence margin.
-            return candidates[0], 0.0
-
-        vec = np.array([features.get(k, 0.0) for k in SIMILARITY_FEATURE_KEYS], dtype=float)
-
-        best_pos, best_similarity = None, None
-        for pos in candidates:
-            profile = self._position_profiles.get(pos)
-            if profile is None:
-                continue
-            norm = np.abs(profile) + 1e-6
-            dist = float(np.linalg.norm((vec - profile) / norm))
-            similarity = 1.0 / (1.0 + dist)
-            if best_similarity is None or similarity > best_similarity:
-                best_similarity, best_pos = similarity, pos
-
-        if best_pos is None:
-            return candidates[0], 0.0
-
-        # similarity is in (0, 1]; treat it directly as a margin ratio for
-        # confidence bucketing (closer match to the position's profile ->
-        # higher confidence in the reassignment).
-        return best_pos, best_similarity
-
-    def _detect_document_group(self, features: dict, image_path: str) -> Optional[tuple]:
         b = features["brightness"]
         bm = features["brightness_median"]
         wr = features["white_ratio"]
-        lap = features["laplacian_var"]
-
-        text_regions, text_length = self._detect_text_density(image_path)
-        has_meaningful_text = text_regions >= 2 and text_length >= 50
-
-        if not has_meaningful_text:
-            return None
-
-        # Absolute brightness floor for "bright scanned document", relaxed for
-        # photos whose overall exposure is objectively low (so a dim-lit
-        # document photo isn't rejected just for being underexposed).
         bright_floor = min(160.0, max(120.0, bm * 1.4))
-        if wr > 0.15 and b > bright_floor:
-            margin = min(
-                self._margin_ratio(wr, 0.15, 0.15),
-                self._margin_ratio(b, bright_floor, 60),
-            )
-            conf, m = self._margin_to_confidence(margin)
-            if text_regions >= 4 and text_length >= 200:
-                return 1, {"method": "structured_form", "confidence": conf, "margin": m, "text_regions": text_regions, "text_length": text_length}
-            return 11, {"method": "document_text", "confidence": conf, "margin": m, "text_regions": text_regions, "text_length": text_length}
-
-        dim_floor = max(100.0, bm * 1.1)
-        if b > dim_floor and lap < 700:
-            margin = min(
-                self._margin_ratio(b, dim_floor, 60),
-                self._margin_ratio(lap, 700, 400, greater=False),
-            )
-            conf, m = self._margin_to_confidence(margin)
-            if text_regions >= 3:
-                return 1, {"method": "form_medium_text", "confidence": conf, "margin": m, "text_regions": text_regions}
-            return 11, {"method": "document_medium_text", "confidence": conf, "margin": m, "text_regions": text_regions}
-
-        return None
-
-    def _detect_driver_group(self, features: dict, image_path: str) -> Optional[tuple]:
-        if self._detect_face(image_path):
-            return 8, {"method": "face_detected", "confidence": "high", "margin": 1.0}
-
-        b = features["brightness"]
-        bl = features["blue_ratio"]
-        cb = features["center_brightness"]
-        cst = features["center_std"]
-        bm = features["brightness_median"]
-        mad = features["brightness_mad"]
-
-        # Center-of-frame darker than the photo's own typical brightness by a
-        # robust margin, rather than a fixed absolute constant.
-        dark_center_floor = bm - max(1.2 * mad, 15.0)
-        if bl < 0.30 and b < 130 and cb < dark_center_floor and cst < 85:
-            if self._detect_face(image_path, min_size=(60, 60)):
-                return 8, {"method": "face_indoor_dark", "confidence": "high", "margin": 1.0}
-
-        return None
-
-    def _detect_exterior_group(self, features: dict, image_path: str) -> Optional[tuple]:
-        b = features["brightness"]
-        sky = features["sky_blue_ratio"]
-        orient = features["orientation"]
-        sat = features["sat_mean"]
-        bl = features["blue_ratio"]
-        tb_ratio = features["top_bottom_brightness_ratio"]
-
-        gate_margin = None
-
-        if sky > 0.05 and (b > 110 or tb_ratio > 1.05):
-            gate_margin = min(
-                self._margin_ratio(sky, 0.05, 0.05),
-                max(self._margin_ratio(b, 110, 60), self._margin_ratio(tb_ratio, 1.05, 0.3)),
-            )
-        elif b > 130 and sat > 30 and bl > 0.18:
-            gate_margin = min(
-                self._margin_ratio(b, 130, 60),
-                self._margin_ratio(sat, 30, 30),
-                self._margin_ratio(bl, 0.18, 0.15),
-            )
-        elif b > 100 and sat > 35 and orient == "landscape":
-            gate_margin = min(
-                self._margin_ratio(b, 100, 60),
-                self._margin_ratio(sat, 35, 30),
-            )
-        elif b > 140 and bl > 0.20:
-            gate_margin = min(
-                self._margin_ratio(b, 140, 60),
-                self._margin_ratio(bl, 0.20, 0.15),
-            )
-
-        if gate_margin is None:
+        if not (wr > 0.15 and b > bright_floor):
             return None
 
-        return self._classify_exterior_subtype(features, image_path, gate_margin)
-
-    def _classify_exterior_subtype(self, features: dict, image_path: str, gate_margin: float = 0.0) -> Optional[tuple]:
-        img = cv2.imread(image_path)
-        if img is None:
-            return None
-        h, w, _ = img.shape
-        if max(h, w) > 800:
-            scale = 800 / max(h, w)
-            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-            h, w, _ = img.shape
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-        symmetry = self._compute_horizontal_symmetry(gray)
-        headlights = self._detect_headlights(gray, img)
-        taillights = self._detect_taillights(img)
-        left_side = self._detect_side_view(gray, side="left")
-        right_side = self._detect_side_view(gray, side="right")
-
-        orient = features["orientation"]
-        ar = features["aspect_ratio"]
-
-        if headlights and symmetry > 0.8 and orient == "landscape":
-            conf, m = self._margin_to_confidence(min(gate_margin, self._margin_ratio(symmetry, 0.8, 0.2)))
-            return 2, {"method": "frontal_symmetry_headlights", "confidence": conf, "margin": m, "symmetry": round(symmetry, 3)}
-        if taillights and symmetry > 0.8 and orient == "landscape":
-            conf, m = self._margin_to_confidence(min(gate_margin, self._margin_ratio(symmetry, 0.8, 0.2)))
-            return 6, {"method": "rear_symmetry_taillights", "confidence": conf, "margin": m, "symmetry": round(symmetry, 3)}
-        if symmetry > 0.85 and ar < 1.4:
-            conf, m = self._margin_to_confidence(min(gate_margin, self._margin_ratio(symmetry, 0.85, 0.15)))
-            return 2, {"method": "high_symmetry_frontal", "confidence": conf, "margin": m, "symmetry": round(symmetry, 3)}
-        if symmetry > 0.8 and ar < 1.4:
-            conf, m = self._margin_to_confidence(min(gate_margin, self._margin_ratio(symmetry, 0.8, 0.2)))
-            return 6, {"method": "high_symmetry_rear", "confidence": conf, "margin": m, "symmetry": round(symmetry, 3)}
-
-        if left_side and ar > 1.6:
-            conf, m = self._margin_to_confidence(min(gate_margin, self._margin_ratio(ar, 1.6, 0.6)))
-            return 4, {"method": "left_side_profile", "confidence": conf, "margin": m}
-        if right_side and ar > 1.6:
-            conf, m = self._margin_to_confidence(min(gate_margin, self._margin_ratio(ar, 1.6, 0.6)))
-            return 5, {"method": "right_side_profile", "confidence": conf, "margin": m}
-
-        # Intermediate 3/4-angle band between pure frontal/rear symmetry and a
-        # pure side profile — covers positions 3 ("Frontal lateral") and 7
-        # ("Lateral trasera"), which no prior detector ever produced.
-        if 0.5 < symmetry <= 0.8 and 1.2 < ar <= 1.6:
-            band_margin = min(
-                gate_margin,
-                self._margin_ratio(symmetry, 0.5, 0.3),
-                self._margin_ratio(ar, 1.6, 0.4, greater=False),
-            )
-            conf, m = self._margin_to_confidence(band_margin)
-            if headlights:
-                return 3, {"method": "three_quarter_front", "confidence": conf, "margin": m, "symmetry": round(symmetry, 3), "aspect_ratio": ar}
-            if taillights:
-                return 7, {"method": "three_quarter_rear", "confidence": conf, "margin": m, "symmetry": round(symmetry, 3), "aspect_ratio": ar}
-
-        if ar > 1.6:
-            conf, m = self._margin_to_confidence(min(gate_margin, self._margin_ratio(ar, 1.6, 0.6)))
-            return 4, {"method": "side_aspect_ratio", "confidence": conf, "margin": m, "aspect_ratio": ar}
-
-        if symmetry > 0.7:
-            conf, m = self._margin_to_confidence(min(gate_margin, self._margin_ratio(symmetry, 0.7, 0.3)))
-            return 2, {"method": "moderate_symmetry_frontal", "confidence": conf, "margin": m, "symmetry": round(symmetry, 3)}
-
-        return None
-
-    def _compute_horizontal_symmetry(self, gray: np.ndarray) -> float:
-        h, w = gray.shape
-        mid = w // 2
-        left = gray[:, :mid]
-        right = cv2.flip(gray[:, mid + (w % 2):], 1)
-        if left.shape != right.shape:
-            min_w = min(left.shape[1], right.shape[1])
-            left = left[:, :min_w]
-            right = right[:, :min_w]
-        diff = cv2.absdiff(left, right)
-        return float(1.0 - np.mean(diff) / 255.0)
-
-    def _detect_headlights(self, gray: np.ndarray, color: np.ndarray) -> bool:
-        h, w = gray.shape
-        bottom = gray[3 * h // 4:, :]
-        blurred = cv2.GaussianBlur(bottom, (15, 15), 0)
-        # Bright-spot threshold relative to this photo's own top-percentile
-        # brightness instead of a fixed absolute 230, so underexposed
-        # headlight shots aren't silently missed.
-        thresh_val = max(150.0, float(np.percentile(blurred, 99)) - 5)
-        _, bright_spots = cv2.threshold(blurred, thresh_val, 255, cv2.THRESH_BINARY)
-        spot_pct = float(np.mean(bright_spots > 0))
-        if 0.01 < spot_pct < 0.15:
-            bottom_color = color[3 * h // 4:, :, :]
-            white_pct = float(np.mean(np.all(bottom_color > 200, axis=2)))
-            if white_pct > 0.02:
-                return True
-        return False
-
-    def _detect_taillights(self, color: np.ndarray) -> bool:
-        h, w, _ = color.shape
-        bottom = color[3 * h // 4:, :, :]
-        hsv = cv2.cvtColor(bottom, cv2.COLOR_BGR2HSV)
-        lower_red = np.array([0, 50, 50])
-        upper_red = np.array([10, 255, 255])
-        mask1 = cv2.inRange(hsv, lower_red, upper_red)
-        lower_red2 = np.array([160, 50, 50])
-        upper_red2 = np.array([180, 255, 255])
-        mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
-        red_mask = mask1 | mask2
-        red_pct = float(np.mean(red_mask > 0))
-        return red_pct > 0.01 and red_pct < 0.20
-
-    def _detect_side_view(self, gray: np.ndarray, side: str = "left") -> bool:
-        h, w = gray.shape
-        third = w // 3
-        if side == "left":
-            region = gray[:, :third]
-        else:
-            region = gray[:, -third:]
-        blurred = cv2.medianBlur(region, 15)
-        circles = cv2.HoughCircles(
-            blurred, cv2.HOUGH_GRADIENT, dp=1.2, minDist=30,
-            param1=50, param2=25, minRadius=int(h * 0.05), maxRadius=int(h * 0.35)
+        margin = min(
+            self._margin_ratio(wr, 0.15, 0.15),
+            self._margin_ratio(b, bright_floor, 60),
         )
-        if circles is not None:
-            return True
+        conf, m = self._margin_to_confidence(margin)
+        return 1, {"method": "structured_form_override", "confidence": conf, "margin": m,
+                   "text_regions": text_regions, "text_length": text_length}
 
-        edges = cv2.Canny(region, 30, 100)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=80, minLineLength=40, maxLineGap=20)
-        if lines is not None and len(lines) > 5:
-            return True
+    def _get_embedding_classifier(self):
+        if self._embedding_classifier is None:
+            from .embedding_classifier import EmbeddingPositionClassifier
+            self._embedding_classifier = EmbeddingPositionClassifier()
+        return self._embedding_classifier
 
-        return False
-
-    def _detect_carparts_group(self, features: dict, image_path: str) -> Optional[tuple]:
-        b = features["brightness"]
-        ep = features["edge_pct"]
-        lap = features["laplacian_var"]
-        sat = features["sat_mean"]
-        orient = features["orientation"]
-
-        if b > 130:
-            return None
-
-        img = cv2.imread(image_path)
-        if img is None:
-            return None
-        h, w, _ = img.shape
-        if max(h, w) > 800:
-            scale = 800 / max(h, w)
-            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-            h, w, _ = img.shape
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-
-        blurred = cv2.medianBlur(gray, 15)
-        circles = cv2.HoughCircles(
-            blurred, cv2.HOUGH_GRADIENT, dp=1.3, minDist=50,
-            param1=50, param2=30, minRadius=int(min(h, w) * 0.05), maxRadius=int(min(h, w) * 0.4)
-        )
-        has_wheel = circles is not None
-
-        red_mask = cv2.inRange(hsv, np.array([0, 30, 30]), np.array([10, 255, 255]))
-        red_mask |= cv2.inRange(hsv, np.array([160, 30, 30]), np.array([180, 255, 255]))
-        red_pct = float(np.mean(red_mask > 0))
-
-        white_mask = cv2.inRange(gray, 200, 255)
-        white_pct = float(np.mean(white_mask > 0))
-
-        is_close_up = has_wheel and b < 100 and orient == "landscape"
-        if is_close_up:
-            m = min(self._margin_ratio(b, 100, 40, greater=False), 1.0)
-            conf, mr = self._margin_to_confidence(m)
-            return 10, {"method": "wheel_closeup", "confidence": conf, "margin": mr}
-
-        if b < 100 and ep < 14 and lap < 600:
-            base_margin = min(
-                self._margin_ratio(b, 100, 40, greater=False),
-                self._margin_ratio(ep, 14, 10, greater=False),
-                self._margin_ratio(lap, 600, 300, greater=False),
-            )
-            conf, mr = self._margin_to_confidence(base_margin)
-            if ep < 10 and b < 85:
-                return 10, {"method": "dark_very_smooth", "confidence": conf, "margin": mr}
-            if sat < 55 and red_pct > 0.02:
-                return 9, {"method": "dark_red_objects", "confidence": conf, "margin": mr}
-            if white_pct > 0.15 and has_wheel:
-                return 10, {"method": "dark_white_objects_wheel", "confidence": conf, "margin": mr}
-            if has_wheel:
-                return 10, {"method": "dark_wheel_detected", "confidence": conf, "margin": mr}
-            return 9, {"method": "dark_smooth_indoor", "confidence": conf, "margin": mr}
-        if b < 115 and ep < 15 and lap < 700:
-            base_margin = min(
-                self._margin_ratio(b, 115, 40, greater=False),
-                self._margin_ratio(ep, 15, 10, greater=False),
-                self._margin_ratio(lap, 700, 300, greater=False),
-            )
-            conf, mr = self._margin_to_confidence(base_margin)
-            if sat < 50:
-                return 9, {"method": "carparts_default", "confidence": conf, "margin": mr}
-            return 10, {"method": "carparts_saturated", "confidence": conf, "margin": mr}
-
-        return None
-
-    def _detect_face(self, image_path: str, min_size: tuple = (80, 80)) -> bool:
+    def _detect_face(self, image_path: str) -> bool:
+        """Haar cascade face detection, used as an override for position 8
+        (Conductor). minNeighbors=9 and a min_size proportional to the image
+        (not a fixed pixel size) are deliberately strict -- at the OpenCV
+        default (minNeighbors=5, absolute min_size), this cascade measured
+        a 44% false-positive rate on non-driver photos (wheels, kit items,
+        seat texture), which was dragging overall accuracy from ~75%
+        (embedding alone) down to ~59% (see backend/eval/results/). The
+        embedding classifier already covers position 8 well on its own, so
+        this override is meant to add a second independent signal only when
+        it's confident -- not to catch every driver photo the embedding
+        might miss."""
         cached = self._cache.get(image_path)
         if cached and "gray" in cached:
             gray = cached["gray"]
@@ -538,18 +252,22 @@ class PhotoClassifier:
             self._cache.setdefault(image_path, {})["gray"] = gray
             self._cache.setdefault(image_path, {})["shape"] = (h, w)
 
-        if h < min_size[0] or w < min_size[1]:
+        min_dim = max(60, int(min(h, w) * 0.12))
+        if h < min_dim or w < min_dim:
             return False
 
         try:
             cascade = self._get_face_cascade()
-            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=min_size)
+            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=9, minSize=(min_dim, min_dim))
             return len(faces) > 0
         except Exception as e:
             logger.debug(f"Face detection failed: {e}")
             return False
 
     def _detect_text_density(self, image_path: str) -> tuple[int, int]:
+        if os.environ.get("SKIP_OCR_DETECTION"):
+            return 0, 0
+
         cached = self._cache.get(image_path)
         if cached and "gray" in cached:
             gray = cached["gray"]
@@ -562,10 +280,14 @@ class PhotoClassifier:
 
         try:
             import pytesseract
-            data = pytesseract.image_to_data(gray, lang="spa", config="--psm 6", output_type=pytesseract.Output.DICT)
+            with _OCR_CONCURRENCY:
+                data = pytesseract.image_to_data(gray, lang="spa", config="--psm 6", output_type=pytesseract.Output.DICT, timeout=10)
             text_regions = sum(1 for t in data["text"] if t.strip())
             total_text_length = sum(len(t) for t in data["text"] if t.strip())
             return text_regions, total_text_length
+        except RuntimeError as e:
+            logger.warning(f"Tesseract timed out for {image_path}: {e}")
+            return 0, 0
         except Exception as e:
             logger.debug(f"Text detection failed for {image_path}: {e}")
             return 0, 0
