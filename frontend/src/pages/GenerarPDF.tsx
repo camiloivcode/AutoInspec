@@ -32,6 +32,12 @@ type ImageFile = {
   preview: string
   assignedPosition: string
   confidence?: 'high' | 'medium' | 'low'
+  // Original classifier suggestion, preserved even after the user
+  // corrects assignedPosition, so the correction can be reported as
+  // (suggested, corrected) feedback instead of being discarded.
+  suggestedPosition?: string
+  suggestedConfidence?: 'high' | 'medium' | 'low'
+  suggestedMethod?: string
 }
 
 type Step = 'idle' | 'analyzing' | 'review' | 'uploading' | 'generating' | 'done' | 'error'
@@ -189,6 +195,9 @@ export default function GenerarPDF() {
     setImages((prev) =>
       prev.map((img) => (img.id === imageId ? { ...img, assignedPosition: position, confidence: undefined } : img))
     )
+    // Note: confidence (the badge shown to the user) is cleared above, but
+    // suggestedPosition/suggestedConfidence/suggestedMethod are left intact
+    // so the correction can still be reported as feedback.
   }
 
   function getCountForPosition(pos: string): number {
@@ -217,11 +226,22 @@ export default function GenerarPDF() {
       }
       const data = await response.json()
       if (data.suggested_plate) setPlate(data.suggested_plate)
+      // Matched by index: the backend returns one suggestion per uploaded
+      // file in the same order it received them (see saved_paths in
+      // generate.py), which survives client-side compression renames that
+      // would break a filename-based match.
       setImages((prev) =>
-        prev.map((img) => {
-          const suggestion = data.suggestions?.find((s: any) => s.filename === img.file.name)
+        prev.map((img, i) => {
+          const suggestion = data.suggestions?.[i]
           if (suggestion?.suggested_position) {
-            return { ...img, assignedPosition: String(suggestion.suggested_position), confidence: suggestion.confidence }
+            return {
+              ...img,
+              assignedPosition: String(suggestion.suggested_position),
+              confidence: suggestion.confidence,
+              suggestedPosition: String(suggestion.suggested_position),
+              suggestedConfidence: suggestion.confidence,
+              suggestedMethod: suggestion.method,
+            }
           }
           return img
         })
@@ -244,7 +264,13 @@ export default function GenerarPDF() {
     const formData = new FormData()
     formData.append('driver_name', driverName.trim()); formData.append('plate', plate.trim().toUpperCase())
     const sorted = [...images].sort((a, b) => parseInt(a.assignedPosition) - parseInt(b.assignedPosition))
-    for (const img of sorted) { formData.append('images', img.file); formData.append('positions', img.assignedPosition) }
+    for (const img of sorted) {
+      formData.append('images', img.file)
+      formData.append('positions', img.assignedPosition)
+      formData.append('suggested_positions', img.suggestedPosition ?? '')
+      formData.append('suggested_confidences', img.suggestedConfidence ?? '')
+      formData.append('suggested_methods', img.suggestedMethod ?? '')
+    }
 
     const xhr = new XMLHttpRequest()
     xhr.open('POST', '/api/generate-pdf/auto')

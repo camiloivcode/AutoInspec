@@ -13,7 +13,8 @@ from typing import List, Optional
 
 from ...infrastructure.document_generation.inspection_generator import InspectionPDFGenerator
 from ...infrastructure.ocr.plate_detector import PlateDetector
-from ...infrastructure.analysis.photo_classifier import PhotoClassifier, INSPECTION_POSITIONS
+from ...infrastructure.analysis.photo_classifier import PhotoClassifier, INSPECTION_POSITIONS, MAX_PER_POSITION
+from ...infrastructure.feedback.feedback_store import record_batch
 from .history import save_history_record
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,6 @@ router = APIRouter(prefix="/api", tags=["Generate PDF"])
 
 TEMP_DIR = "/data/uploads/temp"
 OUTPUT_DIR = "/data/output"
-
-MAX_PER_POSITION = {10: 2}
 
 
 @router.post("/generate-pdf")
@@ -145,6 +144,8 @@ async def auto_analyze(
                 "suggested_position": pos,
                 "position_label": INSPECTION_POSITIONS.get(pos) if pos else None,
                 "confidence": info.get("confidence", "low"),
+                "margin": info.get("margin"),
+                "method": info.get("method"),
             })
 
         return {
@@ -167,6 +168,9 @@ async def generate_pdf_auto(
     plate: str = Form(...),
     images: List[UploadFile] = File(...),
     positions: List[str] = Form(...),
+    suggested_positions: Optional[List[str]] = Form(None),
+    suggested_confidences: Optional[List[str]] = Form(None),
+    suggested_methods: Optional[List[str]] = Form(None),
 ):
     if not driver_name.strip():
         raise HTTPException(status_code=400, detail="El nombre del conductor es obligatorio")
@@ -174,6 +178,8 @@ async def generate_pdf_auto(
         raise HTTPException(status_code=400, detail="La placa es obligatoria")
     if len(images) != len(positions):
         raise HTTPException(status_code=400, detail="Cantidad de imágenes y posiciones no coinciden")
+    if suggested_positions is not None and len(suggested_positions) != len(images):
+        raise HTTPException(status_code=400, detail="Cantidad de sugerencias no coincide con las imágenes")
 
     counts: dict[str, int] = {}
     for pos_str in positions:
@@ -193,6 +199,7 @@ async def generate_pdf_auto(
     try:
         image_map: dict[int, list[str]] = {}
         pos_counters: dict[int, int] = {}
+        saved_paths: list[str] = []
         for img_file, pos_str in zip(images, positions):
             pos = int(pos_str)
             pos_counters[pos] = pos_counters.get(pos, 0) + 1
@@ -202,6 +209,21 @@ async def generate_pdf_auto(
             with open(dest, "wb") as f:
                 f.write(content)
             image_map.setdefault(pos, []).append(dest)
+            saved_paths.append(dest)
+
+        if suggested_positions is not None:
+            corrected = [int(p) for p in positions]
+            suggested = [int(p) if p not in ("", "null", "None") else None for p in suggested_positions]
+            confidences = suggested_confidences or [None] * len(images)
+            methods = suggested_methods or [None] * len(images)
+            record_batch(
+                session_id=session_id,
+                image_paths=saved_paths,
+                suggested_positions=suggested,
+                corrected_positions=corrected,
+                confidences=confidences,
+                methods=methods,
+            )
 
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
