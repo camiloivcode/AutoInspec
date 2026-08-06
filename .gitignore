@@ -33,6 +33,10 @@ docker-compose.override.yml
 # Uploads
 /data/uploads/
 /data/documents/
+/data/feedback/
+
+# Downloaded at Docker build time (see backend/Dockerfile) -- not source.
+backend/models/
 
 # Logs
 *.log
