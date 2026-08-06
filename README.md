@@ -1,6 +1,6 @@
 # AutoInspec
 
-Sistema integral para gestión de inspecciones vehiculares con generación automatizada de documentos (Word/PDF).
+Generador de reportes de inspección vehicular: el usuario sube un lote de fotos, un clasificador las asigna automáticamente a las 11 posiciones de inspección, y el backend genera el PDF.
 
 ```
 AutoInspec/
@@ -11,6 +11,26 @@ AutoInspec/
 │   ├── frontend        :80     (React + Nginx)
 │   └── bot             —       (polling, sin puerto expuesto)
 ```
+
+> **Nota sobre el alcance de este README.** La mayor parte de lo documentado abajo (CRUD de vehículos, inspecciones, plantillas, usuarios) corresponde a una iteración anterior más amplia. Esa capa sigue montada y sus endpoints responden, pero **el frontend actual solo enruta dos páginas**: generación de PDF (`/`) e historial (`/history`). El flujo vivo es el del clasificador de fotos descrito justo abajo.
+
+---
+
+## Flujo principal: fotos → PDF
+
+1. El usuario sube un lote de fotos de la inspección.
+2. `POST /api/auto-analyze` clasifica cada foto en una de las 11 posiciones y extrae la placa por OCR.
+3. El usuario revisa y corrige las asignaciones en la interfaz.
+4. `POST /api/generate-pdf/auto` genera el reporte.
+5. Las correcciones se guardan en `/data/feedback/labels.jsonl` como datos de entrenamiento.
+
+### El clasificador
+
+Encoder de visión **CLIP ViT-B/32** (ONNX cuantizado, ~85 MB, se descarga en tiempo de build) más una cabeza de regresión logística de 11×512 entrenada sobre las fotos de ajuste. La inferencia es solo numpy (`softmax(W @ embedding + b)`), sin dependencias de ML en runtime. Dos señales independientes pueden sobrescribir el resultado del embedding: densidad de texto por OCR (posiciones 1 y 11, documentos) y detección de rostro con Haar cascade (posición 8, conductor).
+
+Reemplazó a una cascada de umbrales absolutos ajustados a mano que medía **4.94%** de acierto. Precisión actual: **91.36%** en el set de ajuste (in-sample) y **75.31%** en validación cruzada dejando una sesión fuera — este último es el número honesto de generalización.
+
+Detalle de arquitectura, comandos de evaluación y reentrenamiento: ver `CLAUDE.md`.
 
 ---
 
@@ -90,12 +110,15 @@ api/  →  application/  →  domain/  →  infrastructure/
 ```
 backend/
 ├── Dockerfile
+├── Dockerfile.eval          # imagen dev: + scikit-learn, para eval/ y reentrenamiento
 ├── requirements.txt
+├── fotos_prueba/            # 81 fotos etiquetadas por subcarpeta (dataset de ajuste)
+├── eval/                    # evaluate.py, grouping.py, train_head.py, results/
 ├── tests/
 └── src/
     ├── main.py              # create_app(), lifespan, auto-migración
     ├── api/
-    │   ├── routes/          # health, vehicles, inspections, documents, templates, users
+    │   ├── routes/          # generate, history + CRUD legacy
     │   ├── middleware/      # CORS, error handler
     │   └── dependencies.py
     ├── application/
@@ -108,6 +131,9 @@ backend/
     │   ├── repositories/
     │   └── services/
     └── infrastructure/
+        ├── analysis/        # clasificador: embedding_classifier, photo_classifier
+        ├── ocr/             # detección de placa
+        ├── feedback/        # persistencia de correcciones del usuario
         ├── database/        # SQLAlchemy models, repositorios, settings
         ├── document_generation/  # Word (python-docx), PDF
         └── storage/
@@ -308,6 +334,17 @@ nginx:80 poll  :8000
 
 Documentación interactiva: `http://localhost:8000/docs`
 
+**Flujo vivo** (lo que usa el frontend actual):
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| POST | `/api/auto-analyze` | Clasifica las fotos y detecta la placa |
+| POST | `/api/generate-pdf/auto` | Genera el PDF desde el flujo asistido |
+| POST | `/api/generate-pdf` | Genera el PDF con asignación manual |
+| GET | `/api/history` | Reportes generados |
+
+**Capa CRUD** (registrada y funcional, pero no la consume el frontend actual):
+
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | GET | `/health` | Health check |
@@ -363,7 +400,7 @@ Generación:
 - **Fechas:** ISO 8601 (`datetime.utcnow().isoformat()`).
 - **Async toda la pila:** Backend async/await con SQLAlchemy async. Bot con asyncio + httpx.
 - **Sin autenticación:** Endpoints abiertos. `BOT_API_KEY` aceptado como Bearer pero no validado.
-- **Testing:** Directorios `tests/` sin framework configurado.
+- **Testing:** Directorios `tests/` sin framework configurado. La precisión del clasificador se mide con `backend/eval/evaluate.py` (no es pytest); ver `CLAUDE.md` para los comandos.
 - **Sin linter/typecheck:** No hay ruff, mypy ni eslint. Frontend build corre `tsc -b`.
 
 ### Documentos
@@ -422,7 +459,7 @@ AutoInspec/
 ├── docker-compose.yml
 ├── .env.example
 ├── .gitignore
-├── AGENTS.md
+├── CLAUDE.md         # Guía de arquitectura para trabajar en el repo
 ├── backend/          → Documentación arriba
 ├── frontend/         → Documentación arriba
 ├── bot/              → Documentación arriba
