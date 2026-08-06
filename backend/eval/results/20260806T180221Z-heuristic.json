@@ -1,0 +1,253 @@
+{
+  "classify": {
+    "mode": "classify",
+    "n_images": 81,
+    "n_groups": 6,
+    "accuracy": 0.8889,
+    "coverage": 1.0,
+    "elapsed_seconds": 46.58,
+    "per_position": {
+      "1": {
+        "label": "Formato de inspección",
+        "correct": 5,
+        "total": 6,
+        "accuracy": 0.8333
+      },
+      "2": {
+        "label": "Frontal",
+        "correct": 7,
+        "total": 7,
+        "accuracy": 1.0
+      },
+      "3": {
+        "label": "Frontal lateral",
+        "correct": 6,
+        "total": 7,
+        "accuracy": 0.8571
+      },
+      "4": {
+        "label": "Lado izquierdo",
+        "correct": 5,
+        "total": 7,
+        "accuracy": 0.7143
+      },
+      "5": {
+        "label": "Lado derecho",
+        "correct": 6,
+        "total": 7,
+        "accuracy": 0.8571
+      },
+      "6": {
+        "label": "Trasera",
+        "correct": 6,
+        "total": 7,
+        "accuracy": 0.8571
+      },
+      "7": {
+        "label": "Lateral trasera",
+        "correct": 5,
+        "total": 7,
+        "accuracy": 0.7143
+      },
+      "8": {
+        "label": "Conductor",
+        "correct": 7,
+        "total": 7,
+        "accuracy": 1.0
+      },
+      "9": {
+        "label": "Kit de carretera",
+        "correct": 7,
+        "total": 8,
+        "accuracy": 0.875
+      },
+      "10": {
+        "label": "Gato y llanta de repuesto",
+        "correct": 11,
+        "total": 11,
+        "accuracy": 1.0
+      },
+      "11": {
+        "label": "SOAT y documentos",
+        "correct": 7,
+        "total": 7,
+        "accuracy": 1.0
+      }
+    },
+    "confusion_matrix": {
+      "1": {
+        "1": 5,
+        "8": 1
+      },
+      "2": {
+        "2": 7
+      },
+      "3": {
+        "3": 6,
+        "2": 1
+      },
+      "4": {
+        "4": 5,
+        "5": 1,
+        "10": 1
+      },
+      "5": {
+        "5": 6,
+        "4": 1
+      },
+      "6": {
+        "6": 6,
+        "7": 1
+      },
+      "7": {
+        "7": 5,
+        "3": 2
+      },
+      "8": {
+        "8": 7
+      },
+      "9": {
+        "9": 7,
+        "8": 1
+      },
+      "10": {
+        "10": 11
+      },
+      "11": {
+        "11": 7
+      }
+    },
+    "method_breakdown": {
+      "clip_embedding": 78,
+      "face_detected_override": 3
+    }
+  },
+  "batch": {
+    "mode": "batch",
+    "n_images": 81,
+    "n_groups": 6,
+    "accuracy": 0.7901,
+    "coverage": 0.8642,
+    "elapsed_seconds": 95.59,
+    "per_position": {
+      "1": {
+        "label": "Formato de inspección",
+        "correct": 4,
+        "total": 6,
+        "accuracy": 0.6667
+      },
+      "2": {
+        "label": "Frontal",
+        "correct": 6,
+        "total": 7,
+        "accuracy": 0.8571
+      },
+      "3": {
+        "label": "Frontal lateral",
+        "correct": 6,
+        "total": 7,
+        "accuracy": 0.8571
+      },
+      "4": {
+        "label": "Lado izquierdo",
+        "correct": 5,
+        "total": 7,
+        "accuracy": 0.7143
+      },
+      "5": {
+        "label": "Lado derecho",
+        "correct": 5,
+        "total": 7,
+        "accuracy": 0.7143
+      },
+      "6": {
+        "label": "Trasera",
+        "correct": 6,
+        "total": 7,
+        "accuracy": 0.8571
+      },
+      "7": {
+        "label": "Lateral trasera",
+        "correct": 6,
+        "total": 7,
+        "accuracy": 0.8571
+      },
+      "8": {
+        "label": "Conductor",
+        "correct": 4,
+        "total": 7,
+        "accuracy": 0.5714
+      },
+      "9": {
+        "label": "Kit de carretera",
+        "correct": 6,
+        "total": 8,
+        "accuracy": 0.75
+      },
+      "10": {
+        "label": "Gato y llanta de repuesto",
+        "correct": 10,
+        "total": 11,
+        "accuracy": 0.9091
+      },
+      "11": {
+        "label": "SOAT y documentos",
+        "correct": 6,
+        "total": 7,
+        "accuracy": 0.8571
+      }
+    },
+    "confusion_matrix": {
+      "1": {
+        "1": 4,
+        "None": 1,
+        "8": 1
+      },
+      "2": {
+        "2": 6,
+        "None": 1
+      },
+      "3": {
+        "3": 6,
+        "None": 1
+      },
+      "4": {
+        "4": 5,
+        "None": 1,
+        "5": 1
+      },
+      "5": {
+        "5": 5,
+        "None": 1,
+        "4": 1
+      },
+      "6": {
+        "6": 6,
+        "None": 1
+      },
+      "7": {
+        "7": 6,
+        "None": 1
+      },
+      "8": {
+        "8": 4,
+        "None": 1,
+        "1": 1,
+        "10": 1
+      },
+      "9": {
+        "None": 1,
+        "9": 6,
+        "8": 1
+      },
+      "10": {
+        "None": 1,
+        "10": 10
+      },
+      "11": {
+        "11": 6,
+        "None": 1
+      }
+    }
+  }
+}
