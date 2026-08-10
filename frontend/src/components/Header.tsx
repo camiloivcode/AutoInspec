@@ -1,6 +1,7 @@
 import { useLocation } from 'react-router-dom'
-import { Menu, Sun, Moon } from 'lucide-react'
+import { Sun, Moon } from 'lucide-react'
 import { useAppStore } from '../store/useAppStore'
+import { useSystemStatus } from '../hooks/useSystemStatus'
 
 const pageTitles: Record<string, string> = {
   '/': 'Generar PDF',
@@ -9,41 +10,40 @@ const pageTitles: Record<string, string> = {
 
 export default function Header() {
   const location = useLocation()
-  const setSidebarOpen = useAppStore((s) => s.setSidebarOpen)
-  const sidebarOpen = useAppStore((s) => s.sidebarOpen)
   const darkMode = useAppStore((s) => s.darkMode)
   const toggleDarkMode = useAppStore((s) => s.toggleDarkMode)
+  const { online } = useSystemStatus()
   const title = pageTitles[location.pathname] || 'AutoInspec'
 
   return (
-    <header className="h-16 flex items-center justify-between px-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl sticky top-0 z-40">
-      <div className="flex items-center gap-4">
-        <button
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="p-2 -ml-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-        >
-          <Menu className="w-5 h-5 text-slate-500 dark:text-slate-400" />
-        </button>
-        <div>
-          <h1 className="font-display text-base font-semibold text-slate-900 dark:text-slate-100">{title}</h1>
-          <p className="text-[11px] text-slate-400 dark:text-slate-500 hidden sm:block">AutoInspec · Generación de PDF</p>
+    <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b-2 border-border-strong bg-surface px-4 md:px-6">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="hidden h-8 w-1.5 shrink-0 rounded-full bg-signal-500 md:block" aria-hidden="true" />
+        <div className="min-w-0">
+          <h1 className="truncate font-display text-base font-bold uppercase tracking-[0.06em] text-fg">{title}</h1>
+          <p className="hidden text-[11px] uppercase tracking-[0.1em] text-fg-subtle sm:block">
+            Inspección vehicular
+          </p>
         </div>
       </div>
       <div className="flex items-center gap-3">
         <button
           onClick={toggleDarkMode}
-          className="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-          title={darkMode ? 'Modo claro' : 'Modo oscuro'}
+          aria-label={darkMode ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+          aria-pressed={darkMode}
+          className="rounded-chip p-2 text-fg-muted transition-colors hover:bg-bg-subtle"
         >
-          {darkMode ? (
-            <Sun className="w-4 h-4 text-amber-400" />
-          ) : (
-            <Moon className="w-4 h-4 text-slate-500" />
-          )}
+          {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </button>
-        <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 dark:bg-emerald-900/20 rounded-full">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300">Sistema activo</span>
+        <div
+          className="hidden items-center gap-2 rounded-chip border border-border-strong px-2.5 py-1.5 sm:flex"
+          role="status"
+          aria-label={online ? 'Sistema conectado' : 'Sistema sin conexión'}
+        >
+          <span className={`h-2 w-2 rounded-full ${online ? 'bg-signal-500' : 'bg-stop-500'}`} />
+          <span className="font-mono text-[11px] font-bold uppercase tracking-[0.08em] text-fg-muted">
+            {online ? 'En línea' : 'Sin conexión'}
+          </span>
         </div>
       </div>
     </header>

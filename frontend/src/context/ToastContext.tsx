@@ -27,10 +27,11 @@ const icons = {
   info: Info,
 }
 
+// Signage code: green guides, yellow warns, red prohibits.
 const styles = {
-  success: 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200',
-  error: 'bg-rose-50 dark:bg-rose-900/30 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200',
-  info: 'bg-sky-50 dark:bg-sky-900/30 border-sky-200 dark:border-sky-800 text-sky-800 dark:text-sky-200',
+  success: 'bg-signal-500 border-signal-700 text-white',
+  error: 'bg-stop-500 border-stop-700 text-white',
+  info: 'bg-plate-400 border-plate-600 text-black',
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
@@ -51,17 +52,22 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      <div className="fixed bottom-6 right-6 z-[200] flex flex-col gap-3 pointer-events-none">
+      <div className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-[200] flex flex-col gap-3 pointer-events-none">
         {toasts.map((t) => {
           const Icon = icons[t.type]
           return (
             <div
               key={t.id}
-              className={`pointer-events-auto flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg shadow-slate-900/10 backdrop-blur-md animate-slide-up ${styles[t.type]}`}
+              role={t.type === 'error' ? 'alert' : 'status'}
+              className={`pointer-events-auto flex animate-slide-up items-start gap-3 rounded-plate border-2 px-4 py-3 ${styles[t.type]}`}
             >
               <Icon className="w-5 h-5 mt-0.5 shrink-0" />
               <p className="text-sm font-medium flex-1 min-w-[200px] max-w-sm">{t.message}</p>
-              <button onClick={() => remove(t.id)} className="p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors">
+              <button
+                onClick={() => remove(t.id)}
+                aria-label="Cerrar notificación"
+                className="p-0.5 rounded hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>

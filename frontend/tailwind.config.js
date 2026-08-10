@@ -5,33 +5,80 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ['"DM Sans"', 'system-ui', 'sans-serif'],
-        body: ['Inter', 'system-ui', 'sans-serif'],
+        // Overpass is a Highway Gothic derivative — the typeface of road signage.
+        display: ['Overpass', 'system-ui', 'sans-serif'],
+        body: ['Overpass', 'system-ui', 'sans-serif'],
+        mono: ['"Overpass Mono"', 'ui-monospace', 'monospace'],
       },
       colors: {
-        primary: {
-          50: '#ecfdf5',
-          100: '#d1fae5',
-          200: '#a7f3d0',
-          300: '#6ee7b7',
-          400: '#34d399',
-          500: '#10b981',
-          600: '#059669',
-          700: '#047857',
-          800: '#065f46',
-          900: '#064e3b',
+        // Surfaces and text: asphalt scale, driven by CSS vars so dark mode
+        // needs no `dark:` duplication at the call site.
+        bg: {
+          DEFAULT: 'rgb(var(--color-bg) / <alpha-value>)',
+          subtle: 'rgb(var(--color-bg-subtle) / <alpha-value>)',
         },
         surface: {
-          DEFAULT: '#ffffff',
-          dark: '#0f172a',
+          DEFAULT: 'rgb(var(--color-surface) / <alpha-value>)',
+          raised: 'rgb(var(--color-surface-raised) / <alpha-value>)',
+        },
+        border: {
+          DEFAULT: 'rgb(var(--color-border) / <alpha-value>)',
+          strong: 'rgb(var(--color-border-strong) / <alpha-value>)',
+        },
+        fg: {
+          DEFAULT: 'rgb(var(--color-fg) / <alpha-value>)',
+          muted: 'rgb(var(--color-fg-muted) / <alpha-value>)',
+          subtle: 'rgb(var(--color-fg-subtle) / <alpha-value>)',
+        },
+
+        // Signage code: green guides, yellow warns, red prohibits. Never decorative.
+        signal: {
+          50: '#e8f3ed',
+          100: '#c5e2d3',
+          200: '#8ec5a9',
+          300: '#4fa47c',
+          400: '#1d855a',
+          500: '#00693E',
+          600: '#005733',
+          700: '#004628',
+          800: '#00351e',
+          900: '#002415',
+        },
+        plate: {
+          50: '#fdf7e3',
+          100: '#fbedbb',
+          200: '#f7de85',
+          300: '#f4d052',
+          400: '#F2C230',
+          500: '#dfa910',
+          600: '#b8880b',
+          700: '#8c6708',
+          800: '#5f4605',
+          900: '#3a2b03',
+        },
+        stop: {
+          50: '#fdeaed',
+          100: '#f9c6cd',
+          200: '#f08c9c',
+          300: '#e2536b',
+          400: '#d42545',
+          500: '#C8102E',
+          600: '#a60d26',
+          700: '#820a1e',
+          800: '#5c0715',
+          900: '#3a040d',
         },
       },
+      borderRadius: {
+        // Shape lock: sign plates 12px, chips 6px, status indicators pill.
+        plate: '12px',
+        chip: '6px',
+      },
       animation: {
-        'fade-in': 'fadeIn 0.5s ease-out forwards',
-        'slide-up': 'slideUp 0.4s ease-out forwards',
-        'scale-in': 'scaleIn 0.3s ease-out forwards',
-        'shimmer': 'shimmer 2s infinite',
-        'pulse-glow': 'pulseGlow 2s ease-in-out infinite',
+        'fade-in': 'fadeIn 0.4s ease-out forwards',
+        'slide-up': 'slideUp 0.35s ease-out forwards',
+        'scale-in': 'scaleIn 0.25s ease-out forwards',
+        hazard: 'hazard 1s linear infinite',
       },
       keyframes: {
         fadeIn: {
@@ -39,20 +86,17 @@ export default {
           '100%': { opacity: '1' },
         },
         slideUp: {
-          '0%': { opacity: '0', transform: 'translateY(16px)' },
+          '0%': { opacity: '0', transform: 'translateY(12px)' },
           '100%': { opacity: '1', transform: 'translateY(0)' },
         },
         scaleIn: {
-          '0%': { opacity: '0', transform: 'scale(0.95)' },
+          '0%': { opacity: '0', transform: 'scale(0.97)' },
           '100%': { opacity: '1', transform: 'scale(1)' },
         },
-        shimmer: {
-          '0%': { backgroundPosition: '-200% 0' },
-          '100%': { backgroundPosition: '200% 0' },
-        },
-        pulseGlow: {
-          '0%, 100%': { boxShadow: '0 0 20px rgba(5, 150, 105, 0.15)' },
-          '50%': { boxShadow: '0 0 40px rgba(5, 150, 105, 0.3)' },
+        // Diagonal hazard stripes travelling one full band per cycle.
+        hazard: {
+          '0%': { backgroundPosition: '0 0' },
+          '100%': { backgroundPosition: '32px 0' },
         },
       },
     },
