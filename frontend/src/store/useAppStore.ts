@@ -26,7 +26,9 @@ export const useAppStore = create<AppState>((set) => ({
       const next = !state.darkMode
       try {
         localStorage.setItem('darkMode', String(next))
-      } catch {}
+      } catch {
+        // localStorage may be unavailable (private mode, disabled) — theme still applies to the DOM.
+      }
       if (next) {
         document.documentElement.classList.add('dark')
       } else {

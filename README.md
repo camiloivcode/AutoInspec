@@ -174,14 +174,33 @@ El proxy de Vite redirige `/api/*` a `http://localhost:8000` automáticamente.
 
 ### Stack
 
-React 18, React Router v6, TanStack Query, Zustand, TailwindCSS, Axios, Lucide icons, react-dropzone.
+React 18, React Router v6, TanStack Query, Zustand, TailwindCSS, Radix UI (dialog, select, popover), react-dropzone, clsx, Lucide icons, y la tipografía Overpass autohospedada vía `@fontsource`.
 
 ### Patrones
 
-- **API calls:** Funciones tipadas en `services/api.ts` con axios.
-- **Estado servidor:** TanStack Query (cacheo, refetch, mutaciones).
+- **API calls:** `fetch` directo contra `/api` (el proxy resuelve el host). No hay capa de servicios: son cuatro endpoints y viven junto a quien los usa.
+- **Estado servidor:** TanStack Query en `History` (listado, borrado, invalidación tras generar un PDF).
+- **Estado del wizard:** dos hooks propios en `pages/GenerarPDF/` — `useGenerationFlow` (máquina de pasos + subida) y `useImageQueue` (cola de imágenes y ciclo de vida de los object URLs).
 - **Estado global mínimo:** Zustand solo para UI local (sidebar, tema).
-- **Ruteo:** React Router v6 con layout en `App.tsx`.
+- **UI:** primitivos en `components/ui/`. La UI nueva se construye sobre ellos, no con Tailwind suelto.
+
+### Diseño
+
+La identidad visual (paleta de señalización vial, tipografía Overpass, escala de formas, reglas de aplicación del color) está documentada en **[`frontend/DESIGN.md`](frontend/DESIGN.md)**. Léelo antes de tocar colores, radios o tipografía.
+
+### Flujo de `GenerarPDF`
+
+```
+Fotos ──→ Análisis ──→ Revisión ──→ PDF
+  │           │            │          │
+  │           │            │          └── descarga + queda en Historial
+  │           │            └── corregir posiciones: por mapa del vehículo
+  │           │                o por desplegable en cada foto
+  │           └── POST /api/auto-analyze (posiciones + placa por OCR)
+  └── arrastrar, elegir archivos, o subir una carpeta completa
+```
+
+Las fotos se comprimen en el navegador antes de subirlas (`utils/imageCompressor.ts`). La subida de carpetas usa un input con `webkitdirectory`, que funciona sobre HTTP plano (no exige contexto seguro) en todos los navegadores de escritorio y en Chrome de Android; donde no hay soporte, el botón no se muestra.
 
 ### Estructura
 
@@ -189,22 +208,42 @@ React 18, React Router v6, TanStack Query, Zustand, TailwindCSS, Axios, Lucide i
 frontend/
 ├── Dockerfile
 ├── nginx.conf              # proxy_pass /api → backend:8000
+├── eslint.config.js        # ESLint 9 flat config
+├── DESIGN.md               # sistema de diseño
 ├── package.json
 ├── vite.config.ts
 ├── tsconfig.json
 ├── tailwind.config.js
-├── index.html
+├── index.html              # aplica el tema oscuro antes de hidratar
 └── src/
-    ├── main.tsx            # Entrypoint
-    ├── App.tsx             # Router + Layout
+    ├── main.tsx            # entrypoint: providers + fuentes
+    ├── App.tsx             # rutas (/, /history, 404)
     ├── components/
+    │   ├── ui/             # primitivos: Button, Card, Field, Select,
+    │   │                   # Badge, Modal, Skeleton, EmptyState, Spinner
+    │   ├── Layout.tsx      # shell: Sidebar + Header + BottomNav
+    │   ├── Sidebar.tsx     # rail fijo ≥md
+    │   ├── BottomNav.tsx   # navegación inferior <md
+    │   ├── Header.tsx
+    │   └── ImagePreview.tsx
+    ├── context/
+    │   └── ToastContext.tsx
     ├── pages/
-    ├── services/           # api.ts (axios instance)
-    ├── store/              # Zustand
+    │   ├── GenerarPDF/
+    │   │   ├── index.tsx           # orquestador
+    │   │   ├── positions.ts        # las 11 posiciones (espejo del backend)
+    │   │   ├── useGenerationFlow.ts
+    │   │   ├── useImageQueue.ts
+    │   │   ├── steps/              # StepUpload/Analyzing/Review/Done
+    │   │   └── components/         # DropZone, PhotoCard,
+    │   │                           # PositionMap, StepIndicator
+    │   ├── History.tsx
+    │   └── NotFound.tsx
     ├── hooks/
-    ├── types/
-    ├── utils/
-    └── index.css           # Tailwind
+    │   └── useSystemStatus.ts      # sondea /api/health
+    ├── store/                      # Zustand
+    ├── utils/                      # imageCompressor
+    └── index.css                   # tokens + Tailwind
 ```
 
 ---
@@ -401,31 +440,13 @@ Generación:
 - **Async toda la pila:** Backend async/await con SQLAlchemy async. Bot con asyncio + httpx.
 - **Sin autenticación:** Endpoints abiertos. `BOT_API_KEY` aceptado como Bearer pero no validado.
 - **Testing:** Directorios `tests/` sin framework configurado. La precisión del clasificador se mide con `backend/eval/evaluate.py` (no es pytest); ver `CLAUDE.md` para los comandos.
-- **Sin linter/typecheck:** No hay ruff, mypy ni eslint. Frontend build corre `tsc -b`.
+- **Linter:** El frontend tiene ESLint 9 (`frontend/eslint.config.js`) y typecheck vía `tsc -b` dentro de `npm run build`. En Python no hay ruff ni mypy.
 
 ### Documentos
 
 - **Word:** `python-docx` con plantillas `{{variable}}`.
 - **PDF:** Conversión vía `docx2pdf` o LibreOffice headless.
 - **Uploads:** `/data/uploads` (volumen Docker `uploads_data`).
-
----
-
-## Shared (`shared/`)
-
-Constantes compartidas entre backend, frontend y bot para mantener consistencia en la nomenclatura de la API.
-
-```
-shared/
-└── types.py      # Estados de inspección, documento, roles, categorías
-```
-
-Incluye:
-- Estados de inspección: `draft`, `in_progress`, `completed`, `cancelled`
-- Tipos de documento: `word`, `pdf`
-- Estados de documento: `pending`, `generated`, `error`
-- Roles de usuario: `admin`, `inspector`, `client`
-- Categorías de items: motor, transmisión, frenos, suspensión, etc.
 
 ---
 
@@ -438,8 +459,8 @@ Incluye:
 3. Implementar lógica de dominio si es necesario
 4. Agregar repositorio concreto en `backend/src/infrastructure/database/`
 5. Registrar el router en `backend/src/api/routes/__init__.py`
-6. Agregar servicio frontend en `frontend/src/services/`
-7. Crear página/componente en `frontend/src/pages/`
+6. Consumirlo desde el frontend con `fetch` (y TanStack Query si necesita cacheo)
+7. Crear página/componente en `frontend/src/pages/`, construyéndolo sobre los primitivos de `frontend/src/components/ui/`
 
 ### Agregar una nueva entidad
 
@@ -460,9 +481,9 @@ AutoInspec/
 ├── .env.example
 ├── .gitignore
 ├── CLAUDE.md         # Guía de arquitectura para trabajar en el repo
+├── README.md
 ├── backend/          → Documentación arriba
 ├── frontend/         → Documentación arriba
-├── bot/              → Documentación arriba
-└── shared/
-    └── types.py      # Constantes compartidas
+│   └── DESIGN.md     # Sistema de diseño de la interfaz
+└── bot/              → Documentación arriba
 ```

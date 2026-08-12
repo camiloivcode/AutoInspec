@@ -28,7 +28,10 @@ export function useGenerationFlow() {
   const [errorMessage, setErrorMessage] = useState('')
   const { toast } = useToast()
   const downloadUrlRef = useRef('')
-  downloadUrlRef.current = downloadUrl
+
+  useEffect(() => {
+    downloadUrlRef.current = downloadUrl
+  }, [downloadUrl])
 
   useEffect(
     () => () => {
@@ -59,9 +62,9 @@ export function useGenerationFlow() {
         setStatusText('')
         toast('success', `Análisis completado para ${pluralize(images.length, 'imagen', 'imágenes')}`)
         return { suggestedPlate: data.suggested_plate, suggestions: data.suggestions ?? [] }
-      } catch (err: any) {
+      } catch (err) {
         setStep('upload')
-        const message = err.message || 'Error al analizar imágenes'
+        const message = err instanceof Error ? err.message : 'Error al analizar imágenes'
         setErrorMessage(message)
         setStatusText('')
         toast('error', message)

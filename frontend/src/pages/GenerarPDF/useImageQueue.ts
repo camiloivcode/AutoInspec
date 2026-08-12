@@ -19,7 +19,10 @@ export type ImageFile = {
 export function useImageQueue() {
   const [images, setImages] = useState<ImageFile[]>([])
   const imagesRef = useRef(images)
-  imagesRef.current = images
+
+  useEffect(() => {
+    imagesRef.current = images
+  }, [images])
 
   useEffect(() => {
     return () => {
