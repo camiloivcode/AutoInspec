@@ -1,46 +1,4 @@
 services:
-  postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
-      POSTGRES_DB: ${DB_NAME:-vehicular_inspections}
-    ports:
-      - "5432:5432"
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-vehicular_inspections}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - vehicular-network
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: "1.0"
-
-  redis:
-    image: redis:7
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-    networks:
-      - vehicular-network
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: "0.5"
-
   backend:
     build:
       context: ./backend
@@ -50,17 +8,9 @@ services:
     environment:
       API_HOST: "0.0.0.0"
       API_PORT: "8000"
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_USER: ${DB_USER:-postgres}
-      DB_PASSWORD: ${DB_PASSWORD:-postgres}
-      DB_NAME: ${DB_NAME:-vehicular_inspections}
     volumes:
       - uploads_data:/data/uploads
       - output_data:/data/output
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
       # stdlib only: httpx is not installed in the backend image, and adding it
       # just for a healthcheck would put a dependency in the production image.
@@ -95,30 +45,7 @@ services:
           memory: 128M
           cpus: "0.5"
 
-  bot:
-    build:
-      context: ./bot
-      dockerfile: Dockerfile
-    environment:
-      BOT_API_BASE_URL: http://backend:8000/api
-      BOT_API_KEY: ${BOT_API_KEY:-}
-      BOT_LOG_LEVEL: ${BOT_LOG_LEVEL:-INFO}
-      BOT_POLLING_INTERVAL_SECONDS: ${BOT_POLLING_INTERVAL_SECONDS:-30}
-      BOT_REDIS_URL: redis://redis:6379/0
-    depends_on:
-      - backend
-      - redis
-    restart: unless-stopped
-    networks:
-      - vehicular-network
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: "0.5"
-
 volumes:
-  pg_data:
   uploads_data:
   output_data:
 

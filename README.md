@@ -5,14 +5,9 @@ Generador de reportes de inspección vehicular: el usuario sube un lote de fotos
 ```
 AutoInspec/
 ├── docker-compose.yml
-│   ├── postgres:16     :5432   (persistencia)
-│   ├── redis:7         :6379   (cola/estado bot)
 │   ├── backend         :8000   (FastAPI async)
-│   ├── frontend        :80     (React + Nginx)
-│   └── bot             —       (polling, sin puerto expuesto)
+│   └── frontend        :80     (React + Nginx)
 ```
-
-> **Nota sobre el alcance de este README.** La mayor parte de lo documentado abajo (CRUD de vehículos, inspecciones, plantillas, usuarios) corresponde a una iteración anterior más amplia. Esa capa sigue montada y sus endpoints responden, pero **el frontend actual solo enruta dos páginas**: generación de PDF (`/`) e historial (`/history`). El flujo vivo es el del clasificador de fotos descrito justo abajo.
 
 ---
 
@@ -28,9 +23,7 @@ AutoInspec/
 
 Encoder de visión **CLIP ViT-B/32** (ONNX cuantizado, ~85 MB, se descarga en tiempo de build) más una cabeza de regresión logística de 11×512 entrenada sobre las fotos de ajuste. La inferencia es solo numpy (`softmax(W @ embedding + b)`), sin dependencias de ML en runtime. Dos señales independientes pueden sobrescribir el resultado del embedding: densidad de texto por OCR (posiciones 1 y 11, documentos) y detección de rostro con Haar cascade (posición 8, conductor).
 
-Reemplazó a una cascada de umbrales absolutos ajustados a mano que medía **4.94%** de acierto. Precisión actual: **91.36%** en el set de ajuste (in-sample) y **75.31%** en validación cruzada dejando una sesión fuera — este último es el número honesto de generalización.
-
-Detalle de arquitectura, comandos de evaluación y reentrenamiento: ver `CLAUDE.md`.
+Reemplazó a una cascada de umbrales absolutos ajustados a mano que medía **4.94%** de acierto. Detalle de arquitectura, números de precisión, comandos de evaluación y reentrenamiento: ver `CLAUDE.md`.
 
 ---
 
@@ -38,13 +31,12 @@ Detalle de arquitectura, comandos de evaluación y reentrenamiento: ver `CLAUDE.
 
 - [Backend](#backend) — API REST, puerto `:8000`
 - [Frontend](#frontend) — SPA React, puerto `:80` (producción) / `:5173` (desarrollo)
-- [Bot](#bot) — Servicio de polling en segundo plano
 
 ---
 
 ## Backend
 
-API REST con FastAPI + SQLAlchemy async + Clean Architecture.
+API REST con FastAPI. Sin base de datos: el estado (fotos en curso, reportes generados) vive en el filesystem bajo `/data/`.
 
 ### Puertos
 
@@ -73,35 +65,15 @@ docker compose up --build backend
 cd backend
 python -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt
-set DB_HOST=localhost DB_USER=postgres DB_PASSWORD=postgres DB_NAME=vehicular_inspections
 uvicorn src.main:app --reload --port 8000
 ```
 
-Requiere PostgreSQL en `localhost:5432`.
-
-### Arquitectura
-
-```
-api/  →  application/  →  domain/  →  infrastructure/
-  │            │              │              │
-  │        (casos uso)   (reglas negocio)    │
-  └─────────── depende de ───────────────────┘
-```
-
-- **`domain/`** — Entidades, value objects, interfaces. Sin dependencias externas.
-- **`application/`** — Casos de uso, DTOs de entrada/salida.
-- **`infrastructure/`** — SQLAlchemy async models, repositorios, generación Word/PDF, file storage.
-- **`api/`** — Rutas FastAPI, middleware CORS/errores, factoría de dependencias.
+Requiere `tesseract-ocr` (+ paquete de idioma `spa`) y LibreOffice (`libreoffice-writer`) instalados localmente — ver `backend/Dockerfile` para los paquetes exactos.
 
 ### Variables de entorno
 
 | Variable | Default | Descripción |
 |----------|---------|-------------|
-| `DB_HOST` | `postgres` | Host PostgreSQL |
-| `DB_PORT` | `5432` | Puerto PostgreSQL |
-| `DB_USER` | `postgres` | Usuario BD |
-| `DB_PASSWORD` | `postgres` | Contraseña BD |
-| `DB_NAME` | `vehicular_inspections` | Nombre BD |
 | `API_HOST` | `0.0.0.0` | Host backend |
 | `API_PORT` | `8000` | Puerto backend |
 
@@ -111,32 +83,21 @@ api/  →  application/  →  domain/  →  infrastructure/
 backend/
 ├── Dockerfile
 ├── Dockerfile.eval          # imagen dev: + scikit-learn, para eval/ y reentrenamiento
+├── .dockerignore
 ├── requirements.txt
 ├── fotos_prueba/            # 81 fotos etiquetadas por subcarpeta (dataset de ajuste)
 ├── eval/                    # evaluate.py, grouping.py, train_head.py, results/
 ├── tests/
 └── src/
-    ├── main.py              # create_app(), lifespan, auto-migración
+    ├── main.py              # create_app()
     ├── api/
-    │   ├── routes/          # generate, history + CRUD legacy
-    │   ├── middleware/      # CORS, error handler
-    │   └── dependencies.py
-    ├── application/
-    │   ├── use_cases/
-    │   ├── dtos/
-    │   └── interfaces/
-    ├── domain/
-    │   ├── entities/
-    │   ├── value_objects/
-    │   ├── repositories/
-    │   └── services/
+    │   ├── routes/          # generate, history, health
+    │   └── middleware/      # CORS, error handler
     └── infrastructure/
         ├── analysis/        # clasificador: embedding_classifier, photo_classifier
         ├── ocr/             # detección de placa
         ├── feedback/        # persistencia de correcciones del usuario
-        ├── database/        # SQLAlchemy models, repositorios, settings
-        ├── document_generation/  # Word (python-docx), PDF
-        └── storage/
+        └── document_generation/  # generación del PDF (python-docx + LibreOffice)
 ```
 
 ---
@@ -207,6 +168,7 @@ Las fotos se comprimen en el navegador antes de subirlas (`utils/imageCompressor
 ```
 frontend/
 ├── Dockerfile
+├── .dockerignore
 ├── nginx.conf              # proxy_pass /api → backend:8000
 ├── eslint.config.js        # ESLint 9 flat config
 ├── DESIGN.md               # sistema de diseño
@@ -248,76 +210,6 @@ frontend/
 
 ---
 
-## Bot
-
-Servicio independiente de polling que procesa documentos e inspecciones en segundo plano.
-
-### Puertos
-
-No expone puertos. Se comunica con el backend vía HTTP y con Redis para estado/cola.
-
-### Cómo ejecutar
-
-**Docker:**
-```bash
-docker compose up --build bot
-```
-
-**Desarrollo (local):**
-```bash
-cd bot
-python -m venv .venv && .venv\Scripts\activate
-pip install -r requirements.txt
-set BOT_API_BASE_URL=http://localhost:8000/api
-set BOT_REDIS_URL=redis://localhost:6379/0
-python -m src.main
-```
-
-Requiere Redis en `localhost:6379` y backend corriendo.
-
-### Ciclo de vida
-
-```
-Inicia → check_api_health()
-  └── loop cada N segundos (default 30):
-        ├── GET /api/documents → filtrar "pending"
-        │   └── POST /api/documents/{id}/generate
-        └── GET /api/inspections → filtrar "in_progress"
-            └── procesar (stub)
-```
-
-### Variables de entorno (prefijo `BOT_`)
-
-| Variable | Default | Descripción |
-|----------|---------|-------------|
-| `BOT_API_BASE_URL` | `http://backend:8000/api` | URL base API |
-| `BOT_API_KEY` | _(vacío)_ | Bearer token (opcional) |
-| `BOT_REDIS_URL` | `redis://redis:6379/0` | Conexión Redis |
-| `BOT_POLLING_INTERVAL_SECONDS` | `30` | Intervalo de polling |
-| `BOT_LOG_LEVEL` | `INFO` | Nivel de log |
-| `BOT_MAX_RETRIES` | `3` | Reintentos máximos |
-
-### Métodos stub (listos para implementar)
-
-- `process_image_ocr(image_url)` — OCR sobre imágenes
-- `notify_whatsapp(to, message)` — Notificaciones WhatsApp
-- `process_batch(inspection_ids)` — Procesamiento por lote
-
-### Estructura
-
-```
-bot/
-├── Dockerfile
-├── requirements.txt
-└── src/
-    ├── main.py           # InspectionBot: ciclo asíncrono
-    ├── config.py         # BotSettings (pydantic-settings)
-    ├── services/         # Integraciones externas (stub)
-    └── handlers/         # Manejadores de eventos
-```
-
----
-
 ## Ejecución general
 
 ### Docker (todo junto)
@@ -343,28 +235,6 @@ docker compose logs -f              # Logs de todos
 docker compose logs -f backend     # Logs de un servicio
 docker compose down                 # Detener
 docker compose down -v              # Detener + borrar volúmenes
-docker compose up -d --scale bot=3  # Escalar bot
-```
-
-### Diagrama de arranque
-
-```
-docker compose up --build
-         │
-    ┌────┴────┐
-    ▼         ▼
- postgres   redis
- healthy   healthy
-    │         │
-    └──┬──────┘
-       ▼
-    backend
- create_tables()
-       │
-  ┌────┼────┐
-  ▼    ▼    ▼
-frontend bot  backend API
-nginx:80 poll  :8000
 ```
 
 ---
@@ -373,62 +243,16 @@ nginx:80 poll  :8000
 
 Documentación interactiva: `http://localhost:8000/docs`
 
-**Flujo vivo** (lo que usa el frontend actual):
-
-| Método | Ruta | Descripción |
-|--------|------|-------------|
-| POST | `/api/auto-analyze` | Clasifica las fotos y detecta la placa |
-| POST | `/api/generate-pdf/auto` | Genera el PDF desde el flujo asistido |
-| POST | `/api/generate-pdf` | Genera el PDF con asignación manual |
-| GET | `/api/history` | Reportes generados |
-
-**Capa CRUD** (registrada y funcional, pero no la consume el frontend actual):
-
 | Método | Ruta | Descripción |
 |--------|------|-------------|
 | GET | `/health` | Health check |
 | GET | `/api/health` | Health check API |
-| GET/POST | `/api/vehicles` | Listar/Crear vehículos |
-| GET/PUT/DELETE | `/api/vehicles/{id}` | Obtener/Actualizar/Eliminar |
-| GET/POST | `/api/inspections` | Listar/Crear inspecciones |
-| GET/PUT | `/api/inspections/{id}` | Obtener/Actualizar |
-| POST | `/api/inspections/{id}/items` | Agregar item |
-| POST | `/api/inspections/{id}/images` | Agregar imagen |
-| POST | `/api/inspections/{id}/complete` | Completar |
-| GET/POST | `/api/documents` | Listar/Crear documentos |
-| POST | `/api/documents/{id}/generate` | Generar documento |
-| GET/POST | `/api/templates` | Listar/Crear plantillas |
-| GET/POST | `/api/users` | Listar/Crear usuarios |
-
-### Estados
-
-| Entidad | Estados |
-|---------|---------|
-| Inspección | `draft` → `in_progress` → `completed` / `cancelled` |
-| Documento | `pending` → `generated` / `error` |
-| Tipo doc. | `word`, `pdf` |
-
-### Diagrama de flujo de dominio
-
-```
-Inspección:
-  draft ──→ in_progress ──→ completed
-                │                 │
-                └── cancelled ←──┘
-
-Documento:
-  pending ──→ generated
-      │
-      └──→ error
-
-Generación:
-  POST /api/documents/{id}/generate
-       │
-       ├──→ word (python-docx)
-       │       └──→ pdf (docx2pdf / LibreOffice)
-       │
-       └──→ upload → /data/uploads/
-```
+| POST | `/api/auto-analyze` | Clasifica las fotos y detecta la placa |
+| POST | `/api/generate-pdf/auto` | Genera el PDF desde el flujo asistido |
+| POST | `/api/generate-pdf` | Genera el PDF con asignación manual |
+| GET | `/api/history` | Reportes generados |
+| GET | `/api/history/download/{filename}` | Descarga un reporte |
+| DELETE | `/api/history/{id}` | Borra un registro del historial |
 
 ---
 
@@ -436,17 +260,17 @@ Generación:
 
 - **Idioma:** Código en inglés. UI y mensajes al usuario en español.
 - **IDs:** UUIDs como strings (`str(uuid4())`).
-- **Fechas:** ISO 8601 (`datetime.utcnow().isoformat()`).
-- **Async toda la pila:** Backend async/await con SQLAlchemy async. Bot con asyncio + httpx.
-- **Sin autenticación:** Endpoints abiertos. `BOT_API_KEY` aceptado como Bearer pero no validado.
-- **Testing:** Directorios `tests/` sin framework configurado. La precisión del clasificador se mide con `backend/eval/evaluate.py` (no es pytest); ver `CLAUDE.md` para los comandos.
+- **Fechas:** ISO 8601 UTC.
+- **Async toda la pila:** Backend async/await. Trabajo CPU-bound (OpenCV, OCR) se despacha a `ThreadPoolExecutor`.
+- **Sin autenticación:** todos los endpoints están abiertos.
+- **Testing:** `backend/tests/` está vacío, sin framework configurado. La precisión del clasificador se mide con `backend/eval/evaluate.py` (no es pytest); ver `CLAUDE.md` para los comandos.
 - **Linter:** El frontend tiene ESLint 9 (`frontend/eslint.config.js`) y typecheck vía `tsc -b` dentro de `npm run build`. En Python no hay ruff ni mypy.
 
 ### Documentos
 
-- **Word:** `python-docx` con plantillas `{{variable}}`.
-- **PDF:** Conversión vía `docx2pdf` o LibreOffice headless.
-- **Uploads:** `/data/uploads` (volumen Docker `uploads_data`).
+- **Generación:** `python-docx` arma un `.docx` por posición, y LibreOffice headless lo convierte a PDF (fallback: se entrega el `.docx` si LibreOffice no está disponible).
+- **Uploads:** `/data/uploads` (volumen Docker `uploads_data`), se borra al terminar cada request.
+- **Salida:** `/data/output` (volumen Docker `output_data`), incluye `history.json`.
 
 ---
 
@@ -455,21 +279,9 @@ Generación:
 ### Agregar un nuevo endpoint
 
 1. Crear ruta en `backend/src/api/routes/`
-2. Definir caso de uso en `backend/src/application/use_cases/`
-3. Implementar lógica de dominio si es necesario
-4. Agregar repositorio concreto en `backend/src/infrastructure/database/`
-5. Registrar el router en `backend/src/api/routes/__init__.py`
-6. Consumirlo desde el frontend con `fetch` (y TanStack Query si necesita cacheo)
-7. Crear página/componente en `frontend/src/pages/`, construyéndolo sobre los primitivos de `frontend/src/components/ui/`
-
-### Agregar una nueva entidad
-
-1. Crear entidad en `backend/src/domain/entities/`
-2. Crear repositorio interfaz en `backend/src/domain/repositories/`
-3. Crear modelo SQLAlchemy en `backend/src/infrastructure/database/models.py`
-4. Crear repositorio concreto en `backend/src/infrastructure/database/`
-5. Agregar caso de uso CRUD en `backend/src/application/use_cases/`
-6. Agregar rutas API en `backend/src/api/routes/`
+2. Registrar el router en `backend/src/api/routes/__init__.py`
+3. Consumirlo desde el frontend con `fetch` (y TanStack Query si necesita cacheo)
+4. Crear página/componente en `frontend/src/pages/`, construyéndolo sobre los primitivos de `frontend/src/components/ui/`
 
 ---
 
@@ -483,7 +295,6 @@ AutoInspec/
 ├── CLAUDE.md         # Guía de arquitectura para trabajar en el repo
 ├── README.md
 ├── backend/          → Documentación arriba
-├── frontend/         → Documentación arriba
-│   └── DESIGN.md     # Sistema de diseño de la interfaz
-└── bot/              → Documentación arriba
+└── frontend/         → Documentación arriba
+    └── DESIGN.md     # Sistema de diseño de la interfaz
 ```

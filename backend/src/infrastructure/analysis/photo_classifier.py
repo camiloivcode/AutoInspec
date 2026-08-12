@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 
 from .reference_matcher import extract_features
+from .embedding_classifier import confidence_from_prob
 
 # classify_batch runs classify() for up to 8 photos concurrently
 # (ThreadPoolExecutor below), but Tesseract is CPU-heavy enough that 8
@@ -40,29 +41,17 @@ INSPECTION_POSITIONS = {
 # enforced on manual assignment in generate.py's MAX_PER_POSITION.
 MAX_PER_POSITION = {10: 2}
 
-
-def _confidence_from_prob(p: float) -> str:
-    """Bucketing for a raw softmax probability (not a margin ratio -- see
-    _margin_to_confidence for that). Thresholds are well above the 11-class
-    chance baseline (~0.09) so "low" still means a real, weak signal."""
-    if p >= 0.5:
-        return "high"
-    if p >= 0.3:
-        return "medium"
-    return "low"
+# _detect_document_override's evidence floor -- also used upfront to decide
+# whether extract_features()'s white-balance/CLAHE pass is worth running at
+# all (see classify()).
+_DOC_TEXT_REGIONS_MIN = 4
+_DOC_TEXT_LENGTH_MIN = 200
 
 
 class PhotoClassifier:
     def __init__(self):
-        self._face_cascade = None
         self._cache: dict[str, dict] = {}
         self._embedding_classifier = None
-
-    def _get_face_cascade(self):
-        if self._face_cascade is None:
-            cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-            self._face_cascade = cv2.CascadeClassifier(cascade_path)
-        return self._face_cascade
 
     # ---- confidence helpers ----
 
@@ -86,46 +75,46 @@ class PhotoClassifier:
         """CLIP-embedding classifier (see embedding_classifier.py) is the
         primary decision maker -- measured at 75% cross-validated accuracy
         on session-held-out data, vs. 4.94% for the hand-tuned absolute
-        thresholds this replaced (backend/eval/results/). OCR and face
-        detection remain as overrides for positions 1 and 8: they're
-        independent, stronger signals than anything a generic image
+        thresholds this replaced (backend/eval/results/). Strong OCR text
+        density remains as an override for position 1 (structured forms):
+        it's an independent, stronger signal than anything a generic image
         embedding can infer, so a confident hit there should win even when
         it disagrees with the embedding head.
+
+        A Haar cascade face-detection override for position 8 (Conductor)
+        was tried and removed: measured after fixing a caching bug that had
+        kept it from ever firing in production, it was net-negative --
+        position 8 was already 100% accurate from the embedding alone, and
+        the cascade's false positives on non-driver photos (wheels, kit
+        items) cost 2 correct classifications elsewhere for zero gain (see
+        backend/eval/results/).
         """
-        cached = self._cache.get(image_path)
-        if cached and "features" in cached:
-            features = cached["features"]
-        else:
-            features = extract_features(image_path)
-            if features is None:
-                return None, {"method": "unreadable", "confidence": "low"}
-            self._cache.setdefault(image_path, {})["features"] = features
+        if self._load_gray(image_path) is None:
+            return None, {"method": "unreadable", "confidence": "low"}
 
         text_regions, text_length = self._detect_text_density(image_path)
-        doc_override = self._detect_document_override(features, text_regions, text_length)
+        doc_override = None
+        if text_regions >= _DOC_TEXT_REGIONS_MIN and text_length >= _DOC_TEXT_LENGTH_MIN:
+            # extract_features() does its own white-balance + CLAHE pass --
+            # only worth paying for once the OCR gate already indicates a
+            # document-shaped photo, since _detect_document_override always
+            # rejects anything below this same threshold anyway.
+            features = extract_features(image_path)
+            if features is not None:
+                doc_override = self._detect_document_override(features, text_regions, text_length)
         if doc_override:
             return doc_override
 
-        embedding_pos, embedding_info = self._get_embedding_classifier().classify(image_path)
-
-        if self._detect_face(image_path):
-            probs = embedding_info.get("probs") or {}
-            driver_prob = float(probs.get("8", 0.0))
-            return 8, {
-                "method": "face_detected_override",
-                "confidence": _confidence_from_prob(driver_prob),
-                "margin": round(driver_prob, 4),
-            }
-
-        return embedding_pos, embedding_info
+        return self._get_embedding_classifier().classify(image_path)
 
     def classify_batch(self, image_paths: list[str]) -> dict:
         """Runs classify() per photo, then resolves position collisions with
         a deterministic global assignment instead of a hand-written adjacency
         map. Every (photo, position) pair the embedding classifier scored is
-        a candidate; OCR/face overrides contribute their single winning
-        position at probability 1.0, since they're independent, stronger
-        evidence than the embedding for the position they fire on. All
+        a candidate; the OCR document override contributes its single
+        winning position at probability 1.0, since it's independent,
+        stronger evidence than the embedding for the position it fires on.
+        All
         candidates are sorted by probability, then assigned greedily -- the
         photo most confident about a slot claims it first. This replaced a
         hardcoded COLLISION_ALLOW_LIST (e.g. "if position 8 is taken, there
@@ -161,8 +150,8 @@ class PhotoClassifier:
                 for pos_str, p in probs.items():
                     candidates.append((idx, int(pos_str), float(p), info))
             else:
-                # OCR/face overrides (and any method without a full
-                # distribution) only offer their single winning position,
+                # The OCR override (and any method without a full
+                # distribution) only offers its single winning position,
                 # treated as maximally confident.
                 candidates.append((idx, pos, 1.0, info))
 
@@ -185,7 +174,7 @@ class PhotoClassifier:
             else:
                 assignments[path] = {
                     "position": pos,
-                    "info": {"method": "global_assignment", "confidence": _confidence_from_prob(prob), "margin": round(prob, 4)},
+                    "info": {"method": "global_assignment", "confidence": confidence_from_prob(prob), "margin": round(prob, 4)},
                 }
             position_counts[pos] += 1
             assigned_idx.add(idx)
@@ -203,7 +192,7 @@ class PhotoClassifier:
         classifier -- weaker text signals (a stray label, a sticker) are
         left to the embedding, which already classifies documents (pos 1
         and 11) at 100% on held-out data without needing OCR at all."""
-        if text_regions < 4 or text_length < 200:
+        if text_regions < _DOC_TEXT_REGIONS_MIN or text_length < _DOC_TEXT_LENGTH_MIN:
             return None
 
         b = features["brightness"]
@@ -227,56 +216,28 @@ class PhotoClassifier:
             self._embedding_classifier = EmbeddingPositionClassifier()
         return self._embedding_classifier
 
-    def _detect_face(self, image_path: str) -> bool:
-        """Haar cascade face detection, used as an override for position 8
-        (Conductor). minNeighbors=9 and a min_size proportional to the image
-        (not a fixed pixel size) are deliberately strict -- at the OpenCV
-        default (minNeighbors=5, absolute min_size), this cascade measured
-        a 44% false-positive rate on non-driver photos (wheels, kit items,
-        seat texture), which was dragging overall accuracy from ~75%
-        (embedding alone) down to ~59% (see backend/eval/results/). The
-        embedding classifier already covers position 8 well on its own, so
-        this override is meant to add a second independent signal only when
-        it's confident -- not to catch every driver photo the embedding
-        might miss."""
+    def _load_gray(self, image_path: str):
+        """Loads and grayscales an image once per instance, caching it so a
+        batch of overrides on the same photo doesn't re-decode the file.
+        Returns None if the file can't be read."""
         cached = self._cache.get(image_path)
         if cached and "gray" in cached:
-            gray = cached["gray"]
-            h, w = cached.get("shape", (0, 0))
-        else:
-            img = cv2.imread(image_path)
-            if img is None:
-                return False
-            h, w = img.shape[:2]
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            self._cache.setdefault(image_path, {})["gray"] = gray
-            self._cache.setdefault(image_path, {})["shape"] = (h, w)
+            return cached["gray"]
 
-        min_dim = max(60, int(min(h, w) * 0.12))
-        if h < min_dim or w < min_dim:
-            return False
-
-        try:
-            cascade = self._get_face_cascade()
-            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=9, minSize=(min_dim, min_dim))
-            return len(faces) > 0
-        except Exception as e:
-            logger.debug(f"Face detection failed: {e}")
-            return False
+        img = cv2.imread(image_path)
+        if img is None:
+            return None
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        self._cache.setdefault(image_path, {})["gray"] = gray
+        return gray
 
     def _detect_text_density(self, image_path: str) -> tuple[int, int]:
         if os.environ.get("SKIP_OCR_DETECTION"):
             return 0, 0
 
-        cached = self._cache.get(image_path)
-        if cached and "gray" in cached:
-            gray = cached["gray"]
-        else:
-            img = cv2.imread(image_path)
-            if img is None:
-                return 0, 0
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            self._cache.setdefault(image_path, {})["gray"] = gray
+        gray = self._load_gray(image_path)
+        if gray is None:
+            return 0, 0
 
         try:
             import pytesseract

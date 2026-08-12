@@ -1,0 +1,16 @@
+# Git
+.git
+.gitignore
+
+# Reinstalled inside the image (npm install runs before COPY . .); copying
+# the host's node_modules over the image's would overwrite Alpine-built
+# native deps with the host's own (possibly Windows) build.
+node_modules/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+*.tsbuildinfo

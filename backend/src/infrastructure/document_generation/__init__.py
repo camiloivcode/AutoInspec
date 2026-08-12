@@ -1,4 +1,3 @@
-from .word_generator import WordGeneratorService
-from .pdf_generator import PDFGeneratorService
+from .inspection_generator import InspectionPDFGenerator
 
-__all__ = ["WordGeneratorService", "PDFGeneratorService"]
+__all__ = ["InspectionPDFGenerator"]

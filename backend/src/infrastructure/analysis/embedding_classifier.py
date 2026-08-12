@@ -35,6 +35,18 @@ DEFAULT_MODEL_PATH = os.environ.get(
 DEFAULT_HEAD_PATH = os.path.join(os.path.dirname(__file__), "position_head.json")
 
 
+def confidence_from_prob(p: float) -> str:
+    """Bucketing for a raw softmax probability. Thresholds are well above
+    the 11-class chance baseline (~0.09) so "low" still means a real, weak
+    signal. Shared with photo_classifier.py, whose overrides also score
+    against this same probability scale."""
+    if p >= 0.5:
+        return "high"
+    if p >= 0.3:
+        return "medium"
+    return "low"
+
+
 def preprocess_clip_array(img_rgb: np.ndarray) -> np.ndarray:
     """Resize-shortest-edge to 224, center crop, CLIP normalize, NCHW float32.
     Takes an already-loaded RGB array so eval/train_head.py can run the same
@@ -136,7 +148,7 @@ class EmbeddingPositionClassifier:
         best_prob = probs[best_pos]
         return best_pos, {
             "method": "clip_embedding",
-            "confidence": "high" if best_prob >= 0.5 else "medium" if best_prob >= 0.3 else "low",
+            "confidence": confidence_from_prob(best_prob),
             "margin": round(best_prob, 4),
             "probs": {str(k): round(v, 4) for k, v in probs.items()},
         }

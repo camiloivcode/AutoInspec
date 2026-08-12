@@ -1,7 +1,7 @@
 """Unified evaluation runner for the photo classifier. Replaces the 10
 ad-hoc test_*.py scripts (which either evaluated on the same data the
-thresholds were tuned on, or destructively shutil.rmtree'd ref_train/ref_test
-on every run).
+thresholds were tuned on, or destructively shutil.rmtree'd their reference
+dataset dirs on every run).
 
 Does not copy or delete any dataset directory. Groups images into
 approximate photo sessions (eval/grouping.py) before splitting, so
@@ -132,7 +132,6 @@ def evaluate_batch(items: list[tuple[str, int]], group_ids: list[int]) -> dict:
     start = time.time()
     for gid, group_items in by_group.items():
         paths = [p for p, _ in group_items]
-        expected_by_path = dict(group_items)
         assignments = classifier.classify_batch(paths)
         for path, expected in group_items:
             total += 1
@@ -209,8 +208,9 @@ if __name__ == "__main__":
     group_ids, n_groups = make_folds(items)
 
     if args.classifier == "embedding" and args.mode in ("batch", "both"):
-        print("NOTE: --classifier embedding only supports --mode classify "
-              "(batch/collision assignment is heuristic-only until Fase 2).", file=sys.stderr)
+        print("NOTE: --classifier embedding only supports --mode classify -- "
+              "classify_batch()'s collision resolution is only exercised via "
+              "PhotoClassifier (--classifier heuristic).", file=sys.stderr)
         args.mode = "classify"
 
     results = {}

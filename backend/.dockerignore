@@ -1,0 +1,28 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.egg
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Tests
+tests/
+
+# Eval / training data -- source for eval/evaluate.py and eval/train_head.py,
+# mounted as a volume at eval time, not baked into the production image.
+fotos_prueba/
+eval/results/
+models/

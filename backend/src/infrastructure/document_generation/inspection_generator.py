@@ -2,7 +2,7 @@ import os
 import re
 import logging
 import tempfile
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from PIL import Image
 from docx import Document
@@ -60,7 +60,6 @@ class InspectionPDFGenerator:
             os.close(fd)
             img.save(tmp_path, 'JPEG', quality=92)
             return tmp_path
-        return img_path
 
     def generate(self, driver_name: str, plate: str, images: Dict[int, List[str]], output_dir: str) -> str:
         doc = Document()
