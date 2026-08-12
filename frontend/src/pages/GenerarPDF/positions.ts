@@ -13,27 +13,36 @@ export const POSITIONS = [
   { value: '11', label: '11. SOAT y documentos', max: 1 },
 ]
 
-/**
- * Where each position sits around the vehicle, as percentages of the map box.
- * Only the six angular positions are placed on the body — the rest (documents,
- * driver, road kit, jack) are not spatial and would be a lie on a diagram.
- */
-export const SPATIAL_NODES: Record<string, { x: number; y: number; short: string }> = {
-  '2': { x: 50, y: 6, short: 'Frontal' },
-  '3': { x: 82, y: 22, short: 'Frontal lat.' },
-  '5': { x: 92, y: 50, short: 'Lado der.' },
-  '7': { x: 82, y: 78, short: 'Lat. trasera' },
-  '6': { x: 50, y: 94, short: 'Trasera' },
-  '4': { x: 8, y: 50, short: 'Lado izq.' },
-}
-
-/** Positions with no meaningful place on the vehicle outline. */
-export const NON_SPATIAL = ['1', '8', '9', '10', '11']
-
+/** Short label for every position — used by the compact Select trigger and the map legend. */
 export const SHORT_LABELS: Record<string, string> = {
   '1': 'Formato',
+  '2': 'Frontal',
+  '3': 'Frontal lat.',
+  '4': 'Lado izq.',
+  '5': 'Lado der.',
+  '6': 'Trasera',
+  '7': 'Lat. trasera',
   '8': 'Conductor',
   '9': 'Kit',
   '10': 'Gato y repuesto',
   '11': 'SOAT',
 }
+
+/**
+ * Where each position sits around the vehicle, as percentages of the map box.
+ * Only the six angular positions are placed on the body — the rest (documents,
+ * driver, road kit, jack) are not spatial and would be a lie on a diagram.
+ * Coordinates are kept inset from the 0/100 edges so a marker centered on
+ * them never clips the box.
+ */
+export const SPATIAL_NODES: Record<string, { x: number; y: number }> = {
+  '2': { x: 50, y: 10 },
+  '3': { x: 76, y: 24 },
+  '5': { x: 86, y: 50 },
+  '7': { x: 76, y: 76 },
+  '6': { x: 50, y: 90 },
+  '4': { x: 14, y: 50 },
+}
+
+/** Positions with no meaningful place on the vehicle outline. */
+export const NON_SPATIAL = ['1', '8', '9', '10', '11']

@@ -8,34 +8,46 @@ export type SelectOption = {
   disabled?: boolean
 }
 
+type Size = 'sm' | 'md'
+
+// Padding lives here, keyed by size, instead of being passed as a raw
+// className string — a caller-supplied `px-2.5` doesn't reliably beat the
+// component's own `px-4` since clsx never deduplicates conflicting utilities.
+const sizeClasses: Record<Size, string> = {
+  sm: 'px-3 py-1.5 text-xs',
+  md: 'px-4 py-2.5 text-sm',
+}
+
 type SelectProps = {
   value: string
   onChange: (value: string) => void
   options: SelectOption[]
   placeholder?: string
+  size?: Size
   'aria-label'?: string
   className?: string
 }
 
-export default function Select({ value, onChange, options, placeholder, className, ...rest }: SelectProps) {
+export default function Select({ value, onChange, options, placeholder, size = 'md', className, ...rest }: SelectProps) {
   return (
     <RadixSelect.Root value={value} onValueChange={onChange}>
       <RadixSelect.Trigger
         className={clsx(
-          'inline-flex w-full items-center justify-between gap-2 rounded-plate border-2 border-border-strong bg-surface px-4 py-2.5 text-sm text-fg',
+          'inline-flex w-full items-center justify-between gap-2 rounded-plate border-2 border-border-strong bg-surface text-fg',
           'transition-colors duration-150 focus:outline-none focus:border-signal-500 focus:ring-2 focus:ring-signal-500/30',
+          sizeClasses[size],
           className
         )}
         {...rest}
       >
         <RadixSelect.Value placeholder={placeholder} />
         <RadixSelect.Icon>
-          <ChevronDown className="w-4 h-4 text-fg-subtle" />
+          <ChevronDown className="w-4 h-4 shrink-0 text-fg-subtle" />
         </RadixSelect.Icon>
       </RadixSelect.Trigger>
       <RadixSelect.Portal>
         <RadixSelect.Content
-          className="z-50 overflow-hidden rounded-plate border-2 border-border-strong bg-surface"
+          className="z-50 overflow-hidden rounded-plate border border-border-strong bg-surface"
           position="popper"
           sideOffset={4}
         >

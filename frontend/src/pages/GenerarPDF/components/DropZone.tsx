@@ -40,8 +40,8 @@ export default function DropZone({ onFiles, compact }: DropZoneProps) {
       }`}
     >
       <input {...getInputProps()} aria-label="Seleccionar fotografías de la inspección" />
-      <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-plate bg-signal-500">
-        <FileImage className="h-8 w-8 text-white" />
+      <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-plate bg-signal-50 dark:bg-signal-900/20">
+        <FileImage className="h-8 w-8 text-signal-600 dark:text-signal-300" />
       </div>
       <p className="font-display text-base font-bold uppercase tracking-[0.04em] text-fg">
         {isDragActive ? 'Suelte las imágenes aquí' : 'Toque o arrastre las fotos'}

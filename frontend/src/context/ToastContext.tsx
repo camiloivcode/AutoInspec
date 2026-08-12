@@ -27,11 +27,17 @@ const icons = {
   info: Info,
 }
 
-// Signage code: green guides, yellow warns, red prohibits.
+// Signage code: green guides, yellow warns, red prohibits — carried by the
+// left bar + icon on a neutral surface, not a full-bleed color fill.
 const styles = {
-  success: 'bg-signal-500 border-signal-700 text-white',
-  error: 'bg-stop-500 border-stop-700 text-white',
-  info: 'bg-plate-400 border-plate-600 text-black',
+  success: 'border-l-signal-500 text-signal-700 dark:text-signal-300',
+  error: 'border-l-stop-500 text-stop-600 dark:text-stop-300',
+  info: 'border-l-plate-500 text-plate-700 dark:text-plate-300',
+}
+const iconStyles = {
+  success: 'text-signal-500',
+  error: 'text-stop-500',
+  info: 'text-plate-500',
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
@@ -59,10 +65,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             <div
               key={t.id}
               role={t.type === 'error' ? 'alert' : 'status'}
-              className={`pointer-events-auto flex animate-slide-up items-start gap-3 rounded-plate border-2 px-4 py-3 ${styles[t.type]}`}
+              className={`pointer-events-auto flex animate-slide-up items-start gap-3 rounded-plate border border-border border-l-4 bg-surface px-4 py-3 shadow-lg shadow-black/10 ${styles[t.type]}`}
             >
-              <Icon className="w-5 h-5 mt-0.5 shrink-0" />
-              <p className="text-sm font-medium flex-1 min-w-[200px] max-w-sm">{t.message}</p>
+              <Icon className={`w-5 h-5 mt-0.5 shrink-0 ${iconStyles[t.type]}`} />
+              <p className="text-sm font-medium flex-1 min-w-[200px] max-w-sm text-fg">{t.message}</p>
               <button
                 onClick={() => remove(t.id)}
                 aria-label="Cerrar notificación"

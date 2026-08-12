@@ -1,7 +1,7 @@
 import { Eye, X } from 'lucide-react'
 import Badge from '../../../components/ui/Badge'
 import Select from '../../../components/ui/Select'
-import { POSITIONS } from '../positions'
+import { POSITIONS, SHORT_LABELS } from '../positions'
 import type { ImageFile } from '../useImageQueue'
 
 const confidenceTone = { high: 'success', medium: 'warning', low: 'neutral' } as const
@@ -25,12 +25,13 @@ export default function PhotoCard({ image, onPreview, onRemove, onAssign, getCou
         const taken = getCountForPosition?.(p.value) ?? 0
         const isOwn = image.assignedPosition === p.value
         const remaining = p.max - taken + (isOwn ? 1 : 0)
-        return { value: p.value, label: `${p.label}${p.max > 1 ? ` (${remaining} disp.)` : ''}` }
+        const short = `${p.value.padStart(2, '0')} · ${SHORT_LABELS[p.value]}`
+        return { value: p.value, label: `${short}${p.max > 1 ? ` (${remaining} disp.)` : ''}` }
       })
     : []
 
   return (
-    <div className="group relative overflow-hidden rounded-plate border-2 border-border-strong bg-surface transition-colors duration-150 hover:border-signal-500">
+    <div className="group relative overflow-hidden rounded-plate border border-border bg-surface transition-colors duration-150 hover:border-signal-500">
       <div className="relative aspect-[4/3] w-full overflow-hidden bg-bg-subtle">
         <button
           onClick={onPreview}
@@ -65,7 +66,7 @@ export default function PhotoCard({ image, onPreview, onRemove, onAssign, getCou
                 options={options}
                 placeholder="— Posición —"
                 aria-label={`Posición asignada a ${image.file.name}`}
-                className="text-xs px-2.5 py-2"
+                size="sm"
               />
             </div>
           </div>

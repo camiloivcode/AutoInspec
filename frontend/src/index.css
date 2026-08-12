@@ -3,29 +3,31 @@
 @tailwind utilities;
 
 @layer base {
-  /* Asphalt scale. Light is the default; dark reads as night-time signage. */
+  /* Asphalt scale, near-neutral grey — the green accent should be the only
+     chroma on screen, so these no longer carry a green tint. Light is the
+     default; dark reads as night-time signage. */
   :root {
-    --color-bg: 244 245 244;
-    --color-bg-subtle: 233 236 233;
+    --color-bg: 245 245 244;
+    --color-bg-subtle: 235 235 234;
     --color-surface: 255 255 255;
     --color-surface-raised: 255 255 255;
-    --color-border: 208 213 209;
-    --color-border-strong: 158 166 160;
-    --color-fg: 17 20 18;
-    --color-fg-muted: 84 93 87;
-    --color-fg-subtle: 124 134 127;
+    --color-border: 213 213 211;
+    --color-border-strong: 168 168 165;
+    --color-fg: 21 21 20;
+    --color-fg-muted: 90 90 87;
+    --color-fg-subtle: 130 130 127;
   }
 
   .dark {
-    --color-bg: 16 19 17;
-    --color-bg-subtle: 26 30 27;
-    --color-surface: 30 35 31;
-    --color-surface-raised: 40 46 42;
-    --color-border: 56 63 58;
-    --color-border-strong: 88 97 91;
-    --color-fg: 240 243 240;
-    --color-fg-muted: 168 177 171;
-    --color-fg-subtle: 128 138 131;
+    --color-bg: 18 18 17;
+    --color-bg-subtle: 28 28 27;
+    --color-surface: 32 32 31;
+    --color-surface-raised: 42 42 41;
+    --color-border: 58 58 56;
+    --color-border-strong: 92 92 89;
+    --color-fg: 242 242 240;
+    --color-fg-muted: 172 172 168;
+    --color-fg-subtle: 130 130 127;
   }
 
   html {
@@ -56,10 +58,13 @@
 
 @layer components {
   /* A real sign is a rounded plate with a keyline set in from the edge.
-     border = plate edge, inset ring = keyline. This replaces soft shadows. */
+     border = plate edge, inset ring = keyline. This replaces soft shadows.
+     The keyline is a genuine hairline derived from the border token — it used
+     to shadow-match the page background, which made it invisible in light
+     mode (white on white). */
   .plate {
     @apply bg-surface border border-border rounded-plate;
-    box-shadow: inset 0 0 0 1px rgb(var(--color-bg) / 0.9);
+    box-shadow: inset 0 0 0 1px rgb(var(--color-border) / 0.6);
   }
 
   .plate-signal {
@@ -67,28 +72,33 @@
     box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.28);
   }
 
-  /* Colombian private plates: black legend on yellow. The identity anchor. */
+  /* Colombian private plates: black legend on yellow. The identity anchor —
+     kept as full-strength chroma only here, deliberately not spent anywhere
+     else, so it stays legible as a landmark rather than background noise. */
   .plate-chip {
     @apply inline-flex items-center rounded-chip bg-plate-400 px-2 py-0.5
            font-mono text-[13px] font-bold uppercase tracking-[0.08em] text-black;
     box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.35);
   }
 
+  /* Badges/pills carry state as a light tint + colored text, not a solid
+     fill — solid fills read fine as one-off accents but turn into visual
+     noise once a grid repeats them a dozen times. */
   .badge {
-    @apply inline-flex items-center rounded-chip px-2 py-0.5 text-[11px]
+    @apply inline-flex items-center gap-1 rounded-chip border px-2 py-0.5 text-[11px]
            font-bold uppercase tracking-[0.08em];
   }
 
   .badge-signal {
-    @apply badge bg-signal-500 text-white;
+    @apply badge border-signal-200 bg-signal-50 text-signal-700 dark:border-signal-700/50 dark:bg-signal-900/30 dark:text-signal-200;
   }
 
   .badge-plate {
-    @apply badge bg-plate-400 text-black;
+    @apply badge border-plate-300 bg-plate-50 text-plate-700 dark:border-plate-700/50 dark:bg-plate-900/30 dark:text-plate-200;
   }
 
   .badge-neutral {
-    @apply badge border border-border-strong bg-bg-subtle text-fg-muted;
+    @apply badge border-border-strong bg-bg-subtle text-fg-muted;
   }
 }
 

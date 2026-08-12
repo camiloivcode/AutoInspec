@@ -25,7 +25,7 @@ export default function StepDone({ step, progress, statusText, downloadUrl, erro
           <Spinner size="lg" className="mx-auto mb-3" />
           <p className="font-display text-base font-semibold text-fg mb-1">{statusText}</p>
           <div className="mx-auto mt-4 max-w-md">
-            <div className="h-3 w-full overflow-hidden rounded-chip border-2 border-border-strong bg-bg-subtle">
+            <div className="h-3 w-full overflow-hidden rounded-chip border border-border-strong bg-bg-subtle">
               <div
                 className="h-full bg-signal-500 transition-all duration-300"
                 style={{ width: `${progress}%` }}
@@ -42,8 +42,8 @@ export default function StepDone({ step, progress, statusText, downloadUrl, erro
     return (
       <Card>
         <CardBody className="pt-10 pb-10 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-plate bg-stop-500">
-            <AlertCircle className="h-8 w-8 text-white" />
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-plate bg-stop-50 dark:bg-stop-900/20">
+            <AlertCircle className="h-8 w-8 text-stop-600 dark:text-stop-300" />
           </div>
           <p className="mb-1 font-display text-lg font-bold uppercase tracking-[0.04em] text-fg">
             No se pudo generar el PDF
@@ -62,8 +62,8 @@ export default function StepDone({ step, progress, statusText, downloadUrl, erro
   return (
     <Card>
       <CardBody className="pt-10 pb-10 text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-plate bg-signal-500">
-          <CheckCircle2 className="h-8 w-8 text-white" />
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-plate bg-signal-50 dark:bg-signal-900/20">
+          <CheckCircle2 className="h-8 w-8 text-signal-600 dark:text-signal-300" />
         </div>
         <p className="mb-1 font-display text-lg font-bold uppercase tracking-[0.04em] text-fg">PDF generado</p>
         <p className="mb-6 font-mono text-sm text-fg-muted">{filename}</p>

@@ -15,11 +15,11 @@ export default function StepIndicator({ current }: { current: number }) {
             key={label}
             aria-current={isActive ? 'step' : undefined}
             className={`relative flex flex-1 items-center justify-center overflow-hidden py-2.5 text-[11px] font-bold uppercase tracking-[0.08em] transition-colors duration-200 sm:text-xs ${
-              isDone
+              isActive
                 ? 'bg-signal-500 text-white'
-                : isActive
-                  ? 'bg-plate-400 text-black'
-                  : 'border-2 border-border-strong bg-surface text-fg-subtle'
+                : isDone
+                  ? 'border border-signal-200 bg-signal-50 text-signal-700 dark:border-signal-700/50 dark:bg-signal-900/20 dark:text-signal-300'
+                  : 'border border-border-strong bg-surface text-fg-subtle'
             }`}
             style={{
               // Chevron: flat left edge on the first, arrow point on the rest.

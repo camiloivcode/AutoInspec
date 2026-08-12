@@ -84,7 +84,7 @@ export default function History() {
       </div>
 
       {isError && (
-        <div className="flex items-start gap-3 rounded-plate border-2 border-stop-500 bg-stop-50 p-4 dark:bg-stop-900/20">
+        <div className="flex items-start gap-3 rounded-plate border border-stop-200 bg-stop-50 p-4 dark:border-stop-800 dark:bg-stop-900/20">
           <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-stop-500" />
           <p className="text-sm font-semibold text-stop-700 dark:text-stop-200">
             No se pudo cargar el historial. Revise su conexión y recargue la página.
@@ -120,8 +120,8 @@ export default function History() {
           {filtered.map((record) => (
             <Card key={record.id} className="transition-colors duration-150 hover:border-signal-500">
               <CardBody className="flex items-center gap-4 pb-4 pt-4">
-                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-plate bg-signal-500">
-                  <FileText className="h-5 w-5 text-white" />
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-plate bg-signal-50 dark:bg-signal-900/20">
+                  <FileText className="h-5 w-5 text-signal-600 dark:text-signal-300" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">

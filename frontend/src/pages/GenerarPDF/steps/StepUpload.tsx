@@ -61,7 +61,7 @@ export default function StepUpload({
             placeholder="ABC123"
             maxLength={10}
             hint={plate.trim() ? undefined : 'Se completa sola tras el análisis'}
-            className="border-plate-500 bg-plate-400 font-mono font-bold uppercase tracking-[0.15em] text-black placeholder:text-black/40 focus:border-plate-600"
+            className="border-l-4 border-l-plate-500 font-mono font-bold uppercase tracking-[0.15em]"
           />
         </CardBody>
       </Card>
@@ -97,7 +97,7 @@ export default function StepUpload({
             <DropZone onFiles={onAddFiles} />
           ) : (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 {images.map((img) => (
                   <PhotoCard
                     key={img.id}
