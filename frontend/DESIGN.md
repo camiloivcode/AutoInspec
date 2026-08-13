@@ -108,6 +108,20 @@ Fue un bug real: el `Select` dentro de `PhotoCard` nunca fue compacto. Por eso e
 
 ---
 
+## El patrón de línea guía (`PositionMap`)
+
+`pages/GenerarPDF/components/PositionMap.tsx` conecta cada posición espacial del vehículo con la foto que le corresponde mediante una **línea guía en ángulo recto**, como una cota rotulada en un plano técnico: punto sobre la carrocería → tramo horizontal hasta un canal vertical → tramo vertical → tramo horizontal hasta el borde de la miniatura. Es el mismo lenguaje que el resto de la identidad — nada de líneas diagonales sueltas ni curvas.
+
+**Un solo sistema de coordenadas.** El SVG (`viewBox="0 0 360 480"`, exportado como `MAP_VIEWBOX`) y las miniaturas HTML posicionadas encima comparten los mismos números — `SPATIAL_NODES` en `positions.ts` define el punto (`x`, `y`), el centro de la ranura (`slotX`, `slotY`) y, si aplica, el canal vertical (`channel`). Nada se calcula por separado; si algo no encaja, es un problema de datos, no de dos sistemas desincronizados.
+
+**Los puntos tocan el borde, no flotan cerca.** La carrocería en `PositionMap.tsx` tiene lados rectos (`x=140` / `x=220` para `y` entre 120 y 360, techo y cola planos en `y=100` / `y=380`) precisamente para que cada punto de `SPATIAL_NODES` pueda coincidir con una coordenada exacta del contorno. Si el contorno cambia de forma, los puntos tienen que moverse con él — no hay manera de verificarlo a ojo, así que antes de tocar cualquiera de los dos, confirma con un script que cada punto sigue cayendo sobre el borde (ver el historial de este archivo para el patrón de verificación usado).
+
+**La línea hereda el estado de la ranura**, siguiendo la regla de color de más arriba: vacía es punteada y neutra; asignada es sólida y toma el tono de confianza de la foto (`signal` alta, `plate` media, neutro si es manual o baja). No hay un color nuevo para esto — es la misma paleta de tres tokens aplicada a un trazo en vez de a un relleno.
+
+**Las posiciones sin ubicación no fingen tener una.** Formato, conductor, kit, gato/repuesto y SOAT usan la misma ranura visual (miniatura + número + rótulo) pero sin línea, en una fila aparte. Forzarlas sobre la carrocería sería mentir sobre dónde está esa foto.
+
+---
+
 ## Accesibilidad
 
 Es parte del sistema, no un extra:

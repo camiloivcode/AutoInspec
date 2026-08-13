@@ -1,10 +1,9 @@
-import { AlertCircle } from 'lucide-react'
+import { AlertCircle, CheckCircle2 } from 'lucide-react'
 import { Card, CardBody } from '../../../components/ui/Card'
+import EmptyState from '../../../components/ui/EmptyState'
 import PhotoCard from '../components/PhotoCard'
 import PositionMap from '../components/PositionMap'
 import type { ImageFile } from '../useImageQueue'
-
-const confidenceRank = { low: 0, medium: 1, high: 2, undefined: -1 } as const
 
 type StepReviewProps = {
   images: ImageFile[]
@@ -16,7 +15,9 @@ type StepReviewProps = {
 }
 
 export default function StepReview({ images, onAssign, onRemove, getCountForPosition, onPreview, errorMessage }: StepReviewProps) {
-  const sorted = [...images].sort((a, b) => confidenceRank[a.confidence ?? 'undefined'] - confidenceRank[b.confidence ?? 'undefined'])
+  // Assigned photos already show connected to the vehicle in the map above —
+  // this tray is only for what's left to place, so nothing appears twice.
+  const pending = images.filter((img) => !img.assignedPosition)
 
   return (
     <div className="space-y-6">
@@ -24,23 +25,33 @@ export default function StepReview({ images, onAssign, onRemove, getCountForPosi
 
       <Card>
         <CardBody className="pt-6">
-          <p className="mb-4 text-xs text-fg-muted">
-            Las fotos con confianza <span className="font-bold text-plate-600 dark:text-plate-300">Media</span> o{' '}
-            <span className="font-bold text-fg">Auto</span> aparecen primero: revíselas con atención.
-          </p>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {sorted.map((img) => (
-              <PhotoCard
-                key={img.id}
-                image={img}
-                onPreview={() => onPreview(img.preview, img.file.name)}
-                onRemove={() => onRemove(img.id)}
-                onAssign={(position) => onAssign(img.id, position)}
-                getCountForPosition={getCountForPosition}
-              />
-            ))}
+          <div className="mb-4 flex items-baseline justify-between gap-3">
+            <h3 className="font-display text-sm font-bold uppercase tracking-[0.08em] text-fg">
+              Sin asignar · {pending.length}
+            </h3>
+            {pending.length > 0 && (
+              <p className="text-xs text-fg-muted">
+                Toque un espacio del mapa o elija posición aquí abajo.
+              </p>
+            )}
           </div>
+
+          {pending.length === 0 ? (
+            <EmptyState icon={CheckCircle2} title="Todas las fotos tienen posición" />
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {pending.map((img) => (
+                <PhotoCard
+                  key={img.id}
+                  image={img}
+                  onPreview={() => onPreview(img.preview, img.file.name)}
+                  onRemove={() => onRemove(img.id)}
+                  onAssign={(position) => onAssign(img.id, position)}
+                  getCountForPosition={getCountForPosition}
+                />
+              ))}
+            </div>
+          )}
 
           {errorMessage && (
             <div

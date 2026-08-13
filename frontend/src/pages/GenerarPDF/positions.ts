@@ -29,19 +29,40 @@ export const SHORT_LABELS: Record<string, string> = {
 }
 
 /**
- * Where each position sits around the vehicle, as percentages of the map box.
- * Only the six angular positions are placed on the body — the rest (documents,
- * driver, road kit, jack) are not spatial and would be a lie on a diagram.
- * Coordinates are kept inset from the 0/100 edges so a marker centered on
- * them never clips the box.
+ * Single coordinate system shared by the vehicle SVG and the HTML photo
+ * slots layered on top of it, so a line drawn from a body point to a slot
+ * never needs separate math in JS — both read from the same numbers.
  */
-export const SPATIAL_NODES: Record<string, { x: number; y: number }> = {
-  '2': { x: 50, y: 10 },
-  '3': { x: 76, y: 24 },
-  '5': { x: 86, y: 50 },
-  '7': { x: 76, y: 76 },
-  '6': { x: 50, y: 90 },
-  '4': { x: 14, y: 50 },
+export const MAP_VIEWBOX = { width: 360, height: 480 }
+export const SLOT_SIZE = { width: 100, height: 75 } // 4:3, matches PhotoCard's aspect ratio
+
+/**
+ * Where each of the six angular positions sits on the vehicle body (x, y),
+ * where its photo slot sits (slotX, slotY), and — for the side positions —
+ * the x of the vertical channel the guide line runs through on its way to
+ * the slot. Front/rear positions connect with a single straight vertical
+ * segment and don't need a channel.
+ *
+ * Body points sit exactly on the vehicle outline drawn in PositionMap.tsx
+ * (straight sides at x=140/220 for y in [120,360], straight top/bottom at
+ * y=100/380) — this is what lets the line touch the silhouette instead of
+ * floating near it. If the outline ever changes, these have to move with it.
+ *
+ * Two rules if these ever move: a position's point and its slot must stay on
+ * the same side of the body (nothing should have to cross the vehicle), and
+ * each side's two channels must stay apart (120/130, 230/240) so their
+ * vertical runs don't overlap.
+ */
+export const SPATIAL_NODES: Record<
+  string,
+  { x: number; y: number; slotX: number; slotY: number; channel?: number }
+> = {
+  '2': { x: 180, y: 100, slotX: 180, slotY: 47 },
+  '3': { x: 140, y: 160, slotX: 60, slotY: 175, channel: 130 },
+  '4': { x: 140, y: 270, slotX: 60, slotY: 305, channel: 120 },
+  '5': { x: 220, y: 190, slotX: 300, slotY: 175, channel: 230 },
+  '7': { x: 220, y: 300, slotX: 300, slotY: 305, channel: 240 },
+  '6': { x: 180, y: 380, slotX: 180, slotY: 433 },
 }
 
 /** Positions with no meaningful place on the vehicle outline. */

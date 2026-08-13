@@ -1,38 +1,66 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import * as Popover from '@radix-ui/react-popover'
-import { Check } from 'lucide-react'
-import { POSITIONS, SPATIAL_NODES, NON_SPATIAL, SHORT_LABELS } from '../positions'
-import type { ImageFile } from '../useImageQueue'
+import clsx from 'clsx'
+import { POSITIONS, SPATIAL_NODES, NON_SPATIAL, SHORT_LABELS, MAP_VIEWBOX, SLOT_SIZE } from '../positions'
+import type { ImageFile, Confidence } from '../useImageQueue'
 
 type PositionMapProps = {
   images: ImageFile[]
   onAssign: (imageId: string, position: string) => void
 }
 
-function stateClasses(filled: number, max: number) {
-  if (filled === 0) return 'border-border-strong bg-surface text-fg-subtle'
-  if (filled < max) return 'border-plate-400 bg-plate-50 text-plate-700 dark:border-plate-700 dark:bg-plate-900/30 dark:text-plate-200'
-  return 'border-signal-500 bg-signal-50 text-signal-700 dark:border-signal-600 dark:bg-signal-900/30 dark:text-signal-200'
+type Tone = 'empty' | 'high' | 'medium' | 'neutral'
+
+function toneOf(filled: ImageFile[]): Tone {
+  if (filled.length === 0) return 'empty'
+  const confidence: Confidence | undefined = filled[0].confidence
+  if (confidence === 'high') return 'high'
+  if (confidence === 'medium') return 'medium'
+  return 'neutral'
 }
 
-function dotClasses(filled: number, max: number) {
-  if (filled === 0) return 'border-border-strong bg-surface text-fg-subtle'
-  if (filled < max) return 'border-plate-500 bg-plate-400 text-black'
-  return 'border-signal-600 bg-signal-500 text-white'
+// Line and slot border share one tone map, so the guide line always matches
+// the state of the thing it points to — confidence when assigned, "empty"
+// (dashed) when not. Confidence is only meaningful once a photo is in the
+// slot, so it doubles as the fill signal.
+const STROKE_TONE: Record<Tone, string> = {
+  empty: 'text-border-strong',
+  high: 'text-signal-500',
+  medium: 'text-plate-500',
+  neutral: 'text-fg-subtle',
+}
+const BORDER_TONE: Record<Tone, string> = {
+  empty: 'border-dashed border-border-strong bg-bg-subtle',
+  high: 'border-signal-500 bg-bg-subtle',
+  medium: 'border-plate-500 bg-bg-subtle',
+  neutral: 'border-border-strong bg-bg-subtle',
 }
 
 const SPATIAL_ORDER = Object.keys(SPATIAL_NODES).sort((a, b) => Number(a) - Number(b))
 
 /**
+ * Right-angle guide line from a body point to its photo slot, in the shared
+ * MAP_VIEWBOX coordinate space: point → horizontal to the vertical channel →
+ * vertical to the slot's height → horizontal to the slot's facing edge.
+ * Front/rear positions have no channel and connect with one straight run.
+ */
+function guidePoints(pos: string): string {
+  const node = SPATIAL_NODES[pos]
+  const { x, y, slotX, slotY, channel } = node
+  if (channel == null) {
+    const edgeY = slotY < y ? slotY + SLOT_SIZE.height / 2 : slotY - SLOT_SIZE.height / 2
+    return `${x},${y} ${slotX},${edgeY}`
+  }
+  const edgeX = slotX < x ? slotX + SLOT_SIZE.width / 2 : slotX - SLOT_SIZE.width / 2
+  return `${x},${y} ${channel},${y} ${channel},${slotY} ${edgeX},${slotY}`
+}
+
+/**
  * The inspector physically walks around the vehicle, so the six angular
- * positions are marked where they actually are. Documents, driver and the
- * road kit have no place on the body and stay in a separate legend row
- * rather than being pinned to the diagram for decoration.
- *
- * The on-body markers are number-only and non-interactive: at the diagram's
- * size a full label button doesn't fit at every angle without clipping the
- * box, so the labelled, clickable control for every position — spatial or
- * not — lives in the legend below instead.
+ * positions sit where they actually are, each linked to its photo by a
+ * right-angle guide line — the same rotation-plan vocabulary as a dimensioned
+ * technical drawing. Documents, driver and the road kit have no place on the
+ * body: they get the same slot, unlined, in a row below.
  */
 export default function PositionMap({ images, onAssign }: PositionMapProps) {
   const [open, setOpen] = useState<string | null>(null)
@@ -41,27 +69,49 @@ export default function PositionMap({ images, onAssign }: PositionMapProps) {
   const unassigned = images.filter((img) => !img.assignedPosition)
   const covered = POSITIONS.filter((p) => byPosition(p.value).length > 0).length
 
-  function renderChip(pos: string) {
+  function renderSlot(pos: string, style: CSSProperties, className: string) {
     const def = POSITIONS.find((p) => p.value === pos)!
     const filled = byPosition(pos)
+    const tone = toneOf(filled)
     const isOpen = open === pos
+    const photo = filled[0]
 
     return (
       <Popover.Root key={pos} open={isOpen} onOpenChange={(next) => setOpen(next ? pos : null)}>
         <Popover.Trigger asChild>
           <button
+            style={style}
             aria-label={`Posición ${pos}, ${def.label.replace(/^\d+\.\s*/, '')}, ${
               filled.length === 0 ? 'sin asignar' : `${filled.length} de ${def.max} asignada`
             }`}
-            className={`flex items-center gap-1.5 rounded-chip border px-2 py-1 font-mono text-[11px] font-bold transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal-500 focus-visible:ring-offset-2 focus-visible:ring-offset-bg ${stateClasses(
-              filled.length,
-              def.max
-            )}`}
+            className={clsx(
+              'relative overflow-hidden rounded-plate border-2 transition-colors duration-150',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal-500 focus-visible:ring-offset-2 focus-visible:ring-offset-bg',
+              BORDER_TONE[tone],
+              className
+            )}
           >
-            <span>{pos.padStart(2, '0')}</span>
-            <span className="font-body font-bold uppercase tracking-[0.04em]">{SHORT_LABELS[pos]}</span>
-            {def.max > 1 && <span className="opacity-70">{filled.length}/{def.max}</span>}
-            {filled.length >= def.max && <Check className="h-3 w-3 shrink-0" />}
+            {photo ? (
+              <>
+                <img src={photo.preview} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                <span className="absolute left-1 top-1 rounded-chip bg-black/60 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white">
+                  {pos.padStart(2, '0')}
+                </span>
+                {def.max > 1 && (
+                  <span className="absolute right-1 top-1 rounded-chip bg-black/60 px-1.5 py-0.5 font-mono text-[10px] font-bold text-white">
+                    {filled.length}/{def.max}
+                  </span>
+                )}
+                <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1.5 py-0.5 text-center text-[9px] font-bold uppercase tracking-wide text-white">
+                  {SHORT_LABELS[pos]}
+                </span>
+              </>
+            ) : (
+              <span className="flex h-full w-full flex-col items-center justify-center gap-0.5 px-1 text-center text-fg-subtle">
+                <span className="font-mono text-xs font-bold">{pos.padStart(2, '0')}</span>
+                <span className="text-[9px] font-bold uppercase tracking-wide">{SHORT_LABELS[pos]}</span>
+              </span>
+            )}
           </button>
         </Popover.Trigger>
         <Popover.Portal>
@@ -124,44 +174,66 @@ export default function PositionMap({ images, onAssign }: PositionMapProps) {
         </p>
       </div>
 
-      {/* Vehicle outline, top-down. The number dots are a visual index only —
-          the interactive, labelled control for each position is the legend
-          chip below, so nothing here needs to fit a label without clipping. */}
-      <div className="relative mx-auto aspect-[4/5] w-full max-w-[19rem] sm:max-w-sm">
-        <svg viewBox="0 0 200 250" className="absolute inset-0 h-full w-full" aria-hidden="true">
-          <g fill="none" stroke="currentColor" className="text-border-strong" strokeWidth="2.5">
-            <path d="M60 40 Q60 24 100 24 Q140 24 140 40 L146 96 Q150 125 146 154 L140 210 Q140 226 100 226 Q60 226 60 210 L54 154 Q50 125 54 96 Z" />
-            <path d="M68 60 Q100 52 132 60 L136 88 Q100 82 64 88 Z" />
-            <path d="M64 168 Q100 160 136 168 L132 196 Q100 190 68 196 Z" />
-            <line x1="54" y1="120" x2="146" y2="120" strokeDasharray="4 6" />
+      {/* Vehicle outline with a right-angle guide line from each body point to
+          its photo slot — a rotation plan, not decoration. The SVG only draws
+          the body and the lines; the slots themselves are HTML buttons laid
+          out in the same coordinate space so the lines always land exactly
+          on their edges. */}
+      <div className="relative mx-auto aspect-[3/4] w-full max-w-xs sm:max-w-sm">
+        <svg
+          viewBox={`0 0 ${MAP_VIEWBOX.width} ${MAP_VIEWBOX.height}`}
+          className="absolute inset-0 h-full w-full"
+          aria-hidden="true"
+        >
+          <g fill="none" stroke="currentColor" className="text-border-strong" strokeWidth="2.5" strokeLinejoin="round">
+            {/* Straight sides (x=140/220 for y 120–360) so the six body
+                points above land exactly on the outline, not near it. */}
+            <path d="M160 100 L200 100 Q220 100 220 120 L220 360 Q220 380 200 380 L160 380 Q140 380 140 360 L140 120 Q140 100 160 100 Z" />
+            <path d="M150 140 Q180 130 210 140" />
+            <path d="M150 340 Q180 350 210 340" />
+            <line x1="180" y1="120" x2="180" y2="360" strokeDasharray="3 7" strokeWidth="1.5" />
           </g>
+
+          {SPATIAL_ORDER.map((pos) => {
+            const filled = byPosition(pos)
+            const tone = toneOf(filled)
+            const node = SPATIAL_NODES[pos]
+            return (
+              <g key={pos} className={STROKE_TONE[tone]}>
+                <polyline
+                  points={guidePoints(pos)}
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinejoin="miter"
+                  strokeDasharray={tone === 'empty' ? '4 4' : undefined}
+                />
+                <circle cx={node.x} cy={node.y} r="3" fill="currentColor" />
+              </g>
+            )
+          })}
         </svg>
 
         {SPATIAL_ORDER.map((pos) => {
-          const def = POSITIONS.find((p) => p.value === pos)!
-          const filled = byPosition(pos)
           const node = SPATIAL_NODES[pos]
-          return (
-            <div
-              key={pos}
-              aria-hidden="true"
-              className={`absolute flex h-7 w-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border font-mono text-[11px] font-bold ${dotClasses(filled.length, def.max)}`}
-              style={{ left: `${node.x}%`, top: `${node.y}%` }}
-            >
-              {pos}
-            </div>
+          return renderSlot(
+            pos,
+            {
+              left: `${(node.slotX / MAP_VIEWBOX.width) * 100}%`,
+              top: `${(node.slotY / MAP_VIEWBOX.height) * 100}%`,
+              width: `${(SLOT_SIZE.width / MAP_VIEWBOX.width) * 100}%`,
+              height: `${(SLOT_SIZE.height / MAP_VIEWBOX.height) * 100}%`,
+            },
+            'absolute -translate-x-1/2 -translate-y-1/2'
           )
         })}
       </div>
 
       <div className="mt-4 border-t border-border pt-3">
-        <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-fg-subtle">En el vehículo</p>
-        <div className="flex flex-wrap gap-2">{SPATIAL_ORDER.map((pos) => renderChip(pos))}</div>
-      </div>
-
-      <div className="mt-3 border-t border-border pt-3">
         <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-fg-subtle">Sin ubicación en el vehículo</p>
-        <div className="flex flex-wrap gap-2">{NON_SPATIAL.map((pos) => renderChip(pos))}</div>
+        <div className="flex flex-wrap gap-2">
+          {NON_SPATIAL.map((pos) => renderSlot(pos, {}, 'h-16 w-24 shrink-0'))}
+        </div>
       </div>
     </div>
   )
